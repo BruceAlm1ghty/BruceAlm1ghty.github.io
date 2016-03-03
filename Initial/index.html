@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Experimental GLSL Image Processing</title>
+  <link rel="stylesheet" href="glimp.css" />
+  <script src='jquery-1.11.0.min.js'></script>
+</head>
+
+<body>
+
+<h1>GLSL Image Processing Demos</h1>
+
+Many image processing filters map nicely to GPU architectures due to the local nature of the algorithms. APIs like GLSL, CUDA, and OpenCL allow GPU hardware to be used as general computational resources, not just rendering resources. GLSL, in particular, provides broad support on desktop and mobile platforms, more so than CUDA and OpenCL. However, GLSL does not provide the general computing environments of CUDA and OpenCL. Here, we explore the breadth of image processing algorithms that can be mapped to GLSL. We explore the space through a sequence on exemplar algorithms that represent large classes of techniques.
+
+<ul>
+<li> A kernel filter requiring a single pass across an image, e.g. convolution
+<li> A kernel filter that cannot be represented as a convolution operator, e.g. bilateral filter
+<li> A filter requiring more than a single pass across an image, e.g. iterative dilation
+<li> A filter with multiple inputs
+<li> A filter with multiple outputs
+<li> A fiilter to process 3D images
+</ul>
+
+
+<h2>Demos:</h2>
+<ul>
+<li> <a href="./gaussian.html">Gaussian Filter</a> - The canonical kernel filter. This example illustrates a brute force approach to convolution - i.e. not leveraging separability - that forms a framework for subsequent filters.
+<li> <a href="./bilateral.html">Bilateral Filter</a> - The Bilateral Filter is not a convolution operator but the brute force approach to convolution can be adapted easily to implement the Bilateral Filter. The Bilateral Filter is an underutilized noise reduction filter that is frequently overlooked due to the high computational costs when implemented on the CPU.
+<li> <a href="./gaussian+bilateral.html">Gaussian and Bilateral comparison</a> - An interactive comparison on the Bilateral Filter and traditional Gaussian smoothing.
+<li> <a href="./dilate.html">Iterative dilation (iterative)</a> - An example of an iterative filter requiring multiple passes across an image while maintaining intermediate results.
+<li> <a href="./growcut.html">Grow Cut segmentation</a> - Grow Cut is a simple and powerful segmentation technique. This algorithm requires multiple passes across an image while maintaining two intermediate result images.
+<li> More to come...
+</ul>
+
+</body>
+</html>
