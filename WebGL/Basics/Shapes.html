@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Simple Shapes with WebGL</title>
+	<script src="../../jquery-1.11.0.min.js"></script>
+	<script src="../gl-matrix-min.js"></script>
+	<link rel="stylesheet" href="../webgl.css" />
+</head>
+<body>
+<div id="nav">
+<a href="index.html">Up</a>
+<a href="Colors.html">Next - Colors</a>
+</div>
+<div id="section">
+<p>Create a canvas with two basic shapes</p>
+<canvas id="c1" width="640" height="480"></canvas>
+</div>
+
+	<script id="shader-vert-simple" type="x-shader/x-vertex">
+	    attribute vec3 aVertexPosition;
+
+	    uniform mat4 uMVMatrix;
+	    uniform mat4 uPMatrix;
+
+	    void main(void) {
+	        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+	    }
+	</script>
+	
+	<script id="shader-frag-simple" type="x-shader/x-fragment">
+    	precision mediump float;
+
+	    void main(void) {
+	        gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+	    }
+	</script>
+
+	<script>
+		'use strict';
+	
+		var canvas = document.getElementById("c1");
+		var gl = canvas.getContext("webgl");
+
+		gl.clearColor(0.0, 0.0, 0.0, 1.0); // black, fully opaque
+		gl.enable(gl.DEPTH_TEST);
+		gl.depthFunc(gl.LEQUAL); // Near things obscure far things
+
+        //////////////////////////////////
+		// the program and shaders
+		var glProgram = gl.createProgram();
+        
+		var vertexShader = gl.createShader(gl.VERTEX_SHADER);
+		gl.shaderSource(vertexShader,
+				document.getElementById("shader-vert-simple").innerHTML);
+		gl.compileShader(vertexShader);
+		if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+			alert('Could not compile vertexShader');
+			console.log(gl.getShaderInfoLog(vertexShader));
+		}
+		  
+		var fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+		gl.shaderSource(fragmentShader, document
+				.getElementById("shader-frag-simple").innerHTML);
+		gl.compileShader(fragmentShader);
+		if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+			alert('Could not compile fragmentShader');
+			console.log(gl.getShaderInfoLog(fragmentShader));
+		}
+		gl.attachShader(glProgram, vertexShader);
+		gl.deleteShader(vertexShader);
+		gl.attachShader(glProgram, fragmentShader);
+		gl.deleteShader(fragmentShader);
+		gl.linkProgram(glProgram);
+		gl.useProgram(glProgram);
+        ///////////////////////////////////////
+		
+		// get the location of the position attribute from our vertex shader         
+		glProgram.vertexPositionAttribute = gl.getAttribLocation(glProgram, "aVertexPosition");
+        // and enable it
+        gl.enableVertexAttribArray(glProgram.vertexPositionAttribute);
+        console.log(glProgram.vertexPositionAttribute);
+
+        // get the location of our two transform matrices from our vertex shaders
+        glProgram.pMatrixUniform = gl.getUniformLocation(glProgram, "uPMatrix");
+        glProgram.mvMatrixUniform = gl.getUniformLocation(glProgram, "uMVMatrix");
+	
+	    var mvMatrix = mat4.create();
+	    var pMatrix = mat4.create();
+	
+	    // this function copies the matrix data to the vertex shader
+	    function setMatrixUniforms() {
+	        gl.uniformMatrix4fv(glProgram.pMatrixUniform, false, pMatrix);
+	        gl.uniformMatrix4fv(glProgram.mvMatrixUniform, false, mvMatrix);
+	    }
+
+	    // the coorindates of our triangle
+		var triangleVertexPositionBuffer;
+	    // create a buffer to hold the vertices
+        triangleVertexPositionBuffer = gl.createBuffer();
+	    // tell webGL 
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexPositionBuffer);
+        var vertices = [
+             0.0,  1.0,  0.0,
+            -1.0, -1.0,  0.0,
+             1.0, -1.0,  0.0
+        ];
+        // set actual data into the bound buffer
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        triangleVertexPositionBuffer.itemSize = 3;
+        triangleVertexPositionBuffer.numItems = 3;
+
+        // the coordinates of our pyramid
+		var squareVertexPositionBuffer;
+        squareVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+        vertices = [
+                    0.1, -0.2,  0.5, // apex
+                    1.1,  1.1,  0.0, // first base
+                   -1.1,  1.1,  0.0,
+                   -1.0, -1.0, -0.2,
+                    1.0, -1.0, -0.2,
+                    1.1,  1.1,  0.0  // close with first base
+               ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        squareVertexPositionBuffer.itemSize = 3;
+        squareVertexPositionBuffer.numItems = 6;
+
+        // set our view port
+		gl.viewport(0, 0, canvas.width, canvas.height);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+		// create a perspective matrix
+	    mat4.perspective(pMatrix, 0.785, canvas.width / canvas.height, 0.1, 10.0);
+		// initialize the move matrix
+		mat4.identity(mvMatrix);
+		// create a translation to the triable coorinates
+        mat4.translate(mvMatrix, mvMatrix,[-1.5, 0.0, -7.0]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexPositionBuffer);
+        // using the vertex attribute location we looked up earlier, 
+        // point that attribute at our bound buffer
+        gl.vertexAttribPointer(glProgram.vertexPositionAttribute, triangleVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        // set the matrices in the vertex shader (translate and persective)
+        setMatrixUniforms();
+        // draw the triable
+        gl.drawArrays(gl.TRIANGLES, 0, triangleVertexPositionBuffer.numItems);
+
+        // we're translating from the matrix's current position
+        mat4.translate(mvMatrix, mvMatrix, [3.0, 0.0, 0.0]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+        gl.vertexAttribPointer(glProgram.vertexPositionAttribute, squareVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, squareVertexPositionBuffer.numItems);
+	</script>
+</body>
+</html>

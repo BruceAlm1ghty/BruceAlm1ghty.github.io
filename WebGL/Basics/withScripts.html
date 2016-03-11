@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Modularized</title>
+	<script src="../gl-setup.js"></script>
+</head>
+<body>
+
+<div id="section">
+<p>Create a canvas with two basic shapes and color by vertex</p>
+<canvas id="c1" width="640" height="480"></canvas>
+</div>
+
+	<script id="shader-frag-color" type="x-shader/x-fragment">
+		varying lowp vec4 vColor;
+    	
+      	void main(void) {
+        	gl_FragColor = vColor;
+      	}
+	</script>
+	<script id="shader-vert-color" type="x-shader/x-vertex">
+		attribute vec3 aVertexPosition;
+      	attribute vec4 aVertexColor;
+    
+      	uniform mat4 uMVMatrix;
+      	uniform mat4 uPMatrix;
+      
+      	varying lowp vec4 vColor;
+		varying lowp vec3 vNormal;
+    
+      	void main(void) {
+	        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+   	    	vColor = aVertexColor;
+			 
+      	}
+	</script>
+
+	<script>
+		'use strict';
+		var glContext = initCanvasById('c1');
+		var glProgram = initProgramById(glContext, 'shader-vert-color', 'shader-frag-color');
+		console.log(glContext);
+		console.log(glProgram);
+	</script>
+
+</body>
+</html>

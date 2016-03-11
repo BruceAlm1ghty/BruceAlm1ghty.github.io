@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="ISO-8859-1">
+<title>Drop Test</title>
+</head>
+<body>
+	<div id="nav">
+		<a href="index.html">Up</a> <a href="Draw.html">Prev - Draw</a>
+	</div>
+
+	<a href="http://www.html5rocks.com/en/tutorials/file/dndfiles/">http://www.html5rocks.com/en/tutorials/file/dndfiles/</a>
+	<br>
+	<input type="file" accept="image/*" id="files" />
+	<br>
+	<img id="image" alt="drop file here" src=""></img>
+	<script>
+		function readFiles(files) {
+			var f;
+			if(files instanceof FileList) {
+				if(files.length > 0) f = files[0];
+			} else if(files instanceof File)
+				f = files;
+			if(undefined != f) {
+				// Only process image files.
+ 				if (f.type.match('image.*')) {
+ 					/*
+ 					FileReader includes four options for reading a file, asynchronously:
+					FileReader.readAsBinaryString(Blob|File) - The result property will contain the file/blob's data as a binary string. Every byte is represented by an integer in the range [0..255].
+					FileReader.readAsText(Blob|File, opt_encoding) - The result property will contain the file/blob's data as a text string. By default the string is decoded as 'UTF-8'. Use the optional encoding parameter can specify a different format.
+					FileReader.readAsDataURL(Blob|File) - The result property will contain the file/blob's data encoded as a data URL.
+					FileReader.readAsArrayBuffer(Blob|File) - The result property will contain the file/blob's data as an ArrayBuffer object.
+					*/
+ 					var reader = new FileReader();
+ 					reader.onloadend = function() {
+ 						document.getElementById('image').src = this.result;
+ 						console.log(this.result);
+ 					}
+					reader.readAsDataURL(f);
+		  		} else {
+		  			console.log(f.type);
+		  		}
+			}
+		}
+		function handleFileDrop(evt) {
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    readFiles(evt.dataTransfer.files[0]); // FileList object.
+		}
+		function handleFileSelect(evt) {
+			evt.stopPropagation();
+			evt.preventDefault();
+   			console.log(evt.target.value);
+   			console.log(evt.target.files);
+   			readFiles(evt.target.files);
+		}
+		function handleDragOver(evt) {
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    evt.dataTransfer.dropEffect = 'copy'; // Explicitly show this is a copy.
+		}
+		document.getElementById('files').addEventListener('change', handleFileSelect, false);
+		
+		console.log(document.getElementById('files'));
+		console.log(document.getElementById('files').value);
+		console.log(document.getElementById('files').innerHTML);
+		console.log(document.getElementById('files').innerText);
+		console.log(document.getElementById('files').placeholder);
+		console.log(document.getElementById('files').title);
+		// Setup the dnd listeners.
+		var dropZone = document.getElementById('image');
+		dropZone.addEventListener('dragover', handleDragOver, false);
+		dropZone.addEventListener('drop', handleFileDrop, false);
+	</script>
+</body>
+</html>

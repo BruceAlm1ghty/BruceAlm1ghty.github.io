@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Over the Edge</title>
+	<script src="../gl-setup.js"></script>
+	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/graph2d.js'></script>
+</head>
+<body>
+<div id="nav">
+<a href="VariableGaussian.html">Back - Variable Gaussian</a>
+<a href="index.html">Up</a>
+</div>
+
+<a href="https://en.wikipedia.org/wiki/Sobel_operator">A Sobel (gradient) filter</a>
+	<h2>Source Image</h2>
+	<input type="file" accept="image/*" id="files" />
+	<br>
+	<img id="sourceImage" src="Initial/MRBrainTumor1_76.png"></img>
+	
+	<h2>Processed Image</h2>
+	<table>
+		<tr>
+			<td rowspan="8"><canvas id="renderCanvas"></canvas></td>
+			<th style="text-align:left"></th>
+		</tr><tr>
+			<td>X: <span id="ktext"></span></td>
+		</tr><tr>
+			<td>Channel: 
+			<select id="channel">
+				<option value="red">red</option>
+				<option value="green">green</option>
+		 		<option value="blue">blue</option>
+		 		<option value="alpha">alpha</option>
+			</select>
+			</td>
+		</tr><tr>
+			<td>Zero: <span id="nzero"></span>, Max: <span id='nmax'></span></td>
+		</tr><tr>
+			<td rowspan="4" style="padding: 0px;border: 1px solid black;"><canvas id='kgraph' height="100" width="256"></canvas></td>
+		</tr>
+	</table>
+	
+	<script id="vertexShader" type="x-shader/x-vertex">
+		precision highp float;
+		attribute vec3 coordinate;
+		attribute vec2 textureCoordinate;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+			gl_Position = vec4(coordinate,1.);
+			varyingTextureCoordinate = textureCoordinate;
+		}
+	</script>
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision highp float;
+		uniform sampler2D sourceTextureSampler;
+		uniform vec2 sourceTextureSize;
+		uniform vec2 sourceTexelSize;
+		uniform vec2 focusPoint;
+		varying vec2 varyingTextureCoordinate;
+
+		float sobel(sampler2D samp, vec2 pt, vec2 step) {
+			vec2 ptR = vec2(step.x, 0); // one pixel right
+			vec2 ptU = vec2(0, step.y); // one pixel up
+			// color at pixels in the neighborhood
+       		vec3 cTR = texture2D(samp, pt.xy + step.xy).rgb;
+       		vec3 cBL = texture2D(samp, pt.xy - step.xy).rgb;
+       		vec3 cTL = texture2D(samp, pt.xy + ptU - ptR).rgb;
+       		vec3 cBR = texture2D(samp, pt.xy - ptU + ptR).rgb;
+       		vec3 cB = texture2D(samp, pt.xy - ptU).rgb;
+       		vec3 cT = texture2D(samp, pt.xy + ptU).rgb;
+       		vec3 cL = texture2D(samp, pt.xy - ptR).rgb;
+       		vec3 cR = texture2D(samp, pt.xy + ptR).rgb;
+			// x and y numeric gradients
+			vec3 gx = (cTR + cR + cR + cBR) - (cTL + cL + cL + cBL);
+			vec3 gy = (cBL + cB + cB + cBR) - (cTL + cT + cT + cTR);
+			// gradient magnitude
+			return 0.25 * sqrt(dot(gx, gx) + dot(gy, gy));
+		}
+		void main(void) {
+			if(varyingTextureCoordinate.x >= focusPoint.x) {
+				float g = sobel(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize);
+				if(g > 1.0) g = 1.0;
+		 	   	gl_FragColor = vec4(g, g, g, 1.0);
+	   		} else 
+				gl_FragColor = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+		}
+	</script>
+
+	<script>
+		'use strict';
+		var focusPoint = [ 0., 0.5 ]; // holds a value to be passed as a uniform to the shader
+		// var sourceTextureSize = [ 0, 0 ];
+
+		// the context
+		var glContext = initCanvasById('renderCanvas');
+		// the shader texts
+		var textFragShader = document.getElementById('fragmentShader').innerText;
+		var textVertShader = document.getElementById('vertexShader').innerText;
+		// the program and shaders
+		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+		
+		var ctxGraph = document.getElementById('kgraph').getContext('2d');
+		
+		// our vertices are simply four corners of a square
+		// create a buffer, and populate it, to store the data
+		var vertexBuffer = pushFloats(glContext,
+				[ 
+		           -1., -1.,  0., 
+		            1., -1.,  0., 
+		           -1.,  1.,  0., 
+		            1.,  1.,  0. 
+		]);
+		// create a buffer of texture coordinates, another square, in 2D
+		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	1, 0, 	0, 1, 	1, 1 ]);
+		// set the vertex and texture coordinate attributes
+		bufferToAttribute(glContext, glProgram, "coordinate", vertexBuffer, 3);
+		bufferToAttribute(glContext, glProgram, "textureCoordinate", textureCoordBuffer, 2);
+
+		// load and set up the image to process in a texture
+		var sourceTextureImage = new Image();
+		var texture;
+		sourceTextureImage.crossOrigin = "anonymous";
+		sourceTextureImage.src = document.getElementById("sourceImage").src;
+		sourceTextureImage.onload = function() {
+			// after the image loads, convert it to a texture
+			texture = imageToTexture(glContext, this);
+			// size the output canvas
+			glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
+			setupTexture(glContext, glProgram, texture);
+			render();
+		};
+
+		var pixels;
+		
+		function setupTexture(glContext, glProgram, texture) {
+			if(undefined != glContext && undefined != glProgram && undefined != texture) {
+				// the sourceTexture
+				glContext.activeTexture(glContext.TEXTURE0);
+				glContext.bindTexture(glContext.TEXTURE_2D, texture);
+				glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
+				// adjust for the texture size
+				// set up the sourceTextureSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTextureSize"), sourceTextureImage.width, sourceTextureImage.height);
+				// set up the sourceTexelSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
+				
+				pixels = new Uint8Array(sourceTextureImage.width * sourceTextureImage.height * 4);
+			}
+		}
+		
+		function handleFileSelect(evt) {
+			evt.stopPropagation();
+			evt.preventDefault();
+   			readFiles(evt.target.files);
+		}
+		function readFiles(files) {
+			var f;
+			if(files instanceof FileList) {
+				if(files.length > 0) f = files[0];
+			} else if(files instanceof File)
+				f = files;
+			if(undefined != f) {
+				// Only process image files.
+ 				if (f.type.match('image.*')) {
+ 					/*
+ 					FileReader includes four options for reading a file, asynchronously:
+					FileReader.readAsBinaryString(Blob|File) - The result property will contain the file/blob's data as a binary string. Every byte is represented by an integer in the range [0..255].
+					FileReader.readAsText(Blob|File, opt_encoding) - The result property will contain the file/blob's data as a text string. By default the string is decoded as 'UTF-8'. Use the optional encoding parameter can specify a different format.
+					FileReader.readAsDataURL(Blob|File) - The result property will contain the file/blob's data encoded as a data URL.
+					FileReader.readAsArrayBuffer(Blob|File) - The result property will contain the file/blob's data as an ArrayBuffer object.
+					*/
+ 					var reader = new FileReader();
+ 					reader.onloadend = function() {
+ 						document.getElementById('sourceImage').src = this.result;
+ 						sourceTextureImage.src = document.getElementById("sourceImage").src;
+ 					}
+					reader.readAsDataURL(f);
+		  		} else {
+		  			console.log(f.type);
+		  		}
+			}
+		}
+		document.getElementById('files').addEventListener('change', handleFileSelect, false);
+		
+		function updateHist() {
+			if(undefined != pixels) {
+				glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+				var mx = 0, t = 0;
+				var hist = new Array(256);
+				hist.fill(0);
+				var i = document.getElementById('channel').selectedIndex;
+				for(var ix = pixels.length; i < ix; i += 4) {
+					t = pixels[i];
+					if(t > mx) mx = t;
+					++hist[t];
+				}
+				document.getElementById('nzero').innerHTML = hist[0];
+				hist[0] = 0;
+				document.getElementById('nmax').innerHTML = Math.max(...hist);
+				drawBarGraph(ctxGraph, hist);
+				//ctxGraph.fillStyle='#00FF00';
+				//drawLineGraph(ctxGraph, hist, 7);
+			}
+		}
+		function render() {
+			// update the focus point
+			glContext.uniform2f(glContext.getUniformLocation(glProgram, "focusPoint"), focusPoint[0], focusPoint[1]);
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			// render the primitive
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+			updateHist();
+		}
+		function onMouseMove(evt) {
+			focusPoint = [ evt.offsetX / sourceTextureImage.width,
+							1. - (evt.offsetY / sourceTextureImage.height) ];
+			document.getElementById('ktext').innerHTML = focusPoint[0];
+			render();
+		}
+		// render after document loaded (jQuery syntax)
+		$(function(){
+			document.getElementById('renderCanvas').addEventListener('mousemove', onMouseMove, false);
+			document.getElementById('channel').addEventListener('change', updateHist, false);
+			render();
+		});
+	</script>
+
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>It's all a blur</title>
+	<script src="../gl-setup.js"></script>
+	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+</head>
+<body>
+<div id="nav">
+<a href="Gaussian.html">Back - Gaussian</a>
+<a href="index.html">Up</a>
+<a href="Sobel.html">Next - Sobel</a>
+</div>
+</div>
+A gaussian blur operator with controllable kernel size and standard deviation 
+
+	<h2>Source Image</h2>
+	<input type="file" accept="image/*" id="files" />
+	<br>
+	<img id="sourceImage" src="Initial/MRBrainTumor1_76.png"></img>
+	
+	<h2>Processed Image</h2>
+	<table>
+		<tr>
+			<td rowspan="9"><canvas id="renderCanvas"></canvas></td>
+			<th style="text-align:left">Kernel Size</th>
+		</tr><tr>
+			<td><input type="range" min="1" max="31" value="5" step="2" id="ksize"></td>
+		</tr><tr>
+			<th style="text-align:left">Kernel Sigma</th>
+		</tr><tr>
+			<td><input type="range" min="1" max="199" value="10" step="1" id="ksig"></td>
+		</tr><tr>
+			<td>Max = <span id="ktext"></span></td>
+		</tr><tr>
+			<td rowspan="4" style="padding: 0px;border: 1px solid black;"><canvas id='kgraph' height="100" width="200"></canvas></td>
+		</tr>
+	</table>
+	
+	<script id="vertexShader" type="x-shader/x-vertex">
+		precision highp float;
+		attribute vec3 coordinate;
+		attribute vec2 textureCoordinate;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+			gl_Position = vec4(coordinate,1.);
+			varyingTextureCoordinate = textureCoordinate;
+		}
+	</script>
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision highp float;
+		// SLICE START
+		// the kernel -- 1D
+		uniform float fKernel[5 * 2 + 1];
+		// the kernal size -- 1D
+		const int nKernel = 5;
+		// SLICE END
+		uniform sampler2D sourceTextureSampler;
+		uniform vec2 sourceTextureSize;
+		uniform vec2 sourceTexelSize;
+		uniform vec2 focusPoint;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+  			vec4 c = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+  			vec4 gc = c;
+  			vec4 bc = c;
+
+			if(nKernel > 1) {
+			    //declare stuff
+				const int kSize = (nKernel-1)/2;
+    			vec3 gfinal_colour = vec3(0.0);
+
+    			float gZ = 0.0;
+			    vec3 cc;
+    			float gfactor;
+    			//read out the texels
+				for(int i = -kSize; i <= kSize; ++i) {
+					for(int j=-kSize; j <= kSize; ++j) {
+        				// color at pixel in the neighborhood
+        				vec2 coord = varyingTextureCoordinate.xy + vec2(float(i), float(j))*sourceTexelSize.xy;
+        				cc = texture2D(sourceTextureSampler, coord).rgb;
+				        // compute the gaussian smoothed
+ 	       				gfactor = fKernel[kSize+j]*fKernel[kSize+i];
+        				gZ += gfactor;
+			        	gfinal_colour += gfactor*cc;
+      				}
+    			}
+		 	   	gc = vec4(gfinal_colour/gZ, 1.0);
+    		}
+   			c = gc;
+			gl_FragColor = c;
+		}
+	</script>
+
+	<script>
+		'use strict';
+//		var focusPoint = [ 0., 0.5 ]; // holds a value to be passed as a uniform to the shader
+//		var sourceTextureSize = [ 0, 0 ];
+
+		// the context
+		var glContext = initCanvasById('renderCanvas');
+		console.log(glContext);
+		var textFragShader = document.getElementById('fragmentShader').innerText;
+		var textVertShader = document.getElementById('vertexShader').innerText;
+		var nFrag = textFragShader.search('// SLICE END');
+//		// the program and shaders
+//		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+//		console.log(glProgram);
+		var	glProgram;
+		
+		var ctxGraph = document.getElementById('kgraph').getContext('2d');
+		
+		// our vertices are simply four corners of a square
+		// create a buffer, and populate it, to store the data
+		var vertexBuffer = pushFloats(glContext,
+				[ 
+		           -1., -1.,  0., 
+		            1., -1.,  0., 
+		           -1.,  1.,  0., 
+		            1.,  1.,  0. 
+//		-1., -1.,  0., 
+//		 1., -1.,  0., 
+//		 1.,  1.,  0., 
+//		-1.,  1.,  0.
+		]);
+		// create a buffer of texture coordinates, another square, in 2D
+		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	1, 0, 	0, 1, 	1, 1 ]);
+//		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	0, 1, 	1, 1, 	1, 0 ]);
+		
+		var sourceTextureImage = new Image();
+		var texture;
+		sourceTextureImage.crossOrigin = "anonymous";
+		sourceTextureImage.src = document.getElementById("sourceImage").src;
+		sourceTextureImage.onload = function() {
+			// after the image loads, convert it to a texture
+			texture = imageToTexture(glContext, this);
+			glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
+			console.log(texture);
+			setupTexture(glContext, glProgram, texture);
+			render();
+		};
+
+		function setupTexture(glContext, glProgram, texture) {
+			if(undefined != glContext && undefined != glProgram && undefined != texture) {
+				// the sourceTexture
+				glContext.activeTexture(glContext.TEXTURE0);
+				glContext.bindTexture(glContext.TEXTURE_2D, texture);
+				glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
+				// adjust for the texture size
+				// set up the sourceTextureSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTextureSize"), sourceTextureImage.width, sourceTextureImage.height);
+				// set up the sourceTexelSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
+			}
+		}
+		
+		function normpdf(x, sigma) {
+  			return 0.39894*Math.exp(-0.5*x*x/(sigma*sigma))/sigma;
+		}
+		
+		var fKSigma = 1.0;
+		var nKSize = 5;
+		
+		// set the size of the blur kernel
+		function setKernelSize(nSize) {
+			nKSize = nSize;
+			var textF = 'precision highp float; uniform float fKernel[' + (nSize * 2 + 1) + ']; const int nKernel = ' + nSize + ';' + textFragShader.substr(nFrag);
+			// recompile the shaders
+			glProgram = initProgram(glContext, textVertShader, textF);
+			// set the texture and vertex coordinates
+			bufferToAttribute(glContext, glProgram, "coordinate", vertexBuffer, 3);
+			bufferToAttribute(glContext, glProgram, "textureCoordinate", textureCoordBuffer, 2);
+			setupTexture(glContext, glProgram, texture);
+			console.log(nSize);
+			// populate the kernel
+			setKernelSigma(fKSigma);
+		}
+		
+		function drawLineGraph(g, values) {
+			g.save();
+			g.setTransform(1,0,0,1,0,0);
+			g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+			var dXPixel = values.length / g.canvas.width;
+			var dYPixel = Math.max(...values) / g.canvas.height;
+			console.log(dXPixel);
+			console.log(dYPixel);
+			g.setTransform(1.0 / dXPixel,0,0,-0.95 / dYPixel,0,g.canvas.height);
+			g.lineWidth = 2 * Math.min(dXPixel, dYPixel);
+			g.fillStyle="#FF0000";
+			g.beginPath();
+			for(var i = 0; i < values.length; ++i) {
+				if(i)
+					g.lineTo(i + 0.5, values[i]);
+				else
+					g.moveTo(0.5,values[i]);
+				g.fillRect(i + 0.5 - dXPixel, values[i] - dYPixel, 3 * dXPixel, 3 * dYPixel);
+			}
+			g.stroke();
+			g.restore();
+		}
+		
+		// set the variance of the blur kernel
+		// populates the kernel values in the fragment shader
+		function setKernelSigma(sig) {
+			fKSigma = sig;
+			var fKernel = [];
+			var ix = (nKSize - 1) / 2;
+			for (var i = 0; i <= ix; ++i)
+				fKernel[ix - i] = fKernel[ix + i] = normpdf(i, fKSigma);
+			glContext.uniform1fv(glContext.getUniformLocation(glProgram, "fKernel[0]"), fKernel);
+			console.log(fKernel);
+			document.getElementById('ktext').innerHTML = Math.max(...fKernel);
+			drawLineGraph(ctxGraph, fKernel);
+		}
+	
+		function onChangeKernelSize(evt) {
+			var nSize = document.getElementById('ksize').value;
+			setKernelSize(nSize);
+			render();
+		}
+		function onChangeKernelSigma(evt) {
+			var nSize = document.getElementById('ksig').value;
+			setKernelSigma(0.1 * nSize);
+			render();
+		}
+		
+		document.getElementById('ksize').onchange = onChangeKernelSize;
+		document.getElementById('ksig').onchange = onChangeKernelSigma;
+		
+		function handleFileSelect(evt) {
+			evt.stopPropagation();
+			evt.preventDefault();
+   			readFiles(evt.target.files);
+		}
+		function readFiles(files) {
+			var f;
+			if(files instanceof FileList) {
+				if(files.length > 0) f = files[0];
+			} else if(files instanceof File)
+				f = files;
+			if(undefined != f) {
+				// Only process image files.
+ 				if (f.type.match('image.*')) {
+ 					/*
+ 					FileReader includes four options for reading a file, asynchronously:
+					FileReader.readAsBinaryString(Blob|File) - The result property will contain the file/blob's data as a binary string. Every byte is represented by an integer in the range [0..255].
+					FileReader.readAsText(Blob|File, opt_encoding) - The result property will contain the file/blob's data as a text string. By default the string is decoded as 'UTF-8'. Use the optional encoding parameter can specify a different format.
+					FileReader.readAsDataURL(Blob|File) - The result property will contain the file/blob's data encoded as a data URL.
+					FileReader.readAsArrayBuffer(Blob|File) - The result property will contain the file/blob's data as an ArrayBuffer object.
+					*/
+ 					var reader = new FileReader();
+ 					reader.onloadend = function() {
+ 						document.getElementById('sourceImage').src = this.result;
+ 						sourceTextureImage.src = document.getElementById("sourceImage").src;
+ 						console.log(this.result);
+ 					}
+					reader.readAsDataURL(f);
+		  		} else {
+		  			console.log(f.type);
+		  		}
+			}
+		}
+		document.getElementById('files').addEventListener('change', handleFileSelect, false);
+		
+		function render() {
+			console.log('render');
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			// the primitive
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+			// it doesn't know quad :(
+//			console.log(glContext.drawArrays(glContext.QUADS, 0, 4));
+//			console.log(glContext.getError());
+//			glContext.drawArrays(glContext.TRIANGLE_FAN, 0, 4);
+//			console.log(glContext.getError());
+
+		}
+		// render after document loaded (jQuery syntax)
+		$(function(){
+			console.log('first render');
+			//setKernelSize(5);
+			onChangeKernelSize();
+			//render();
+		});
+	</script>
+
+</body>
+</html>

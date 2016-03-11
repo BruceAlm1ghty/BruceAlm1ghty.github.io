@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>draw baby</title>
+	<script src="./jquery-1.11.0.min.js"></script>
+</head>
+<body>
+<div id="nav">
+	<a href="index.html">Up</a>
+	<a href="Shapes.html">Next - File</a>
+</div>
+<p>Mouse: 
+<ul>
+<li>Canvas: <span id="ptCanvas"></span></li>
+<li>Client: <span id="ptClient"></span></li>
+<li>Page: <span id="ptPage"></span></li>
+<li>Screen: <span id="ptScreen"></span></li>
+<li>Button: <span id="button"></span></li>
+</ul>
+</p>
+<input type="button" value="clear" id="clearInput" onclick="clearImage()"></input>
+<button id="clearButton">clear</button>
+<br>
+<canvas id="draw" width="640" height="480" style="border: 1px solid black;"></canvas>
+
+<script type="text/javascript">
+	'use strict';
+	var c = document.getElementById('draw');
+	var context = c.getContext("2d");
+	// the current mouse point in the image
+	var pt = [ 0, 0];
+	// the point of the left click
+	var ptDown = [-1, -1];
+	// store the image here to allow us to draw the currently dragged line on it
+	var img;
+	
+	// the mouse is moving in the canvas
+	function onMouseMove(evt) {
+		pt = [evt.offsetX, evt.offsetY];
+		document.getElementById('ptCanvas').innerHTML = pt;
+		document.getElementById('ptClient').innerHTML = [evt.clientX, evt.clientY];
+		document.getElementById('ptPage').innerHTML = [evt.pageX, evt.pageY];
+		document.getElementById('ptScreen').innerHTML = [evt.screenX, evt.screenY];
+//		if(undefined != img && ptDown[0] != -1 && ptDown[1] != -1) {
+		// are we tracking it?
+		onUpdate(evt);
+	}
+	function onUpdate(evt) {
+		if(undefined != img && ptDown[0] != -1 && ptDown[1] != -1) {
+			context.putImageData(img, 0, 0);
+			context.save();
+			context.strokeStyle="#FF0000";
+			if(evt.altKey)
+				context.strokeRect(Math.min(pt[0], ptDown[0]), Math.min(pt[1], ptDown[1]), Math.abs(pt[0]-ptDown[0]), Math.abs(pt[1] - ptDown[1]));
+			else 
+				drawLine(ptDown, pt, evt.ctrlKey);
+			context.restore();
+		}
+	}
+	function onMouseDown(evt) {
+	    evt.stopPropagation();
+	    evt.preventDefault();
+		document.getElementById('button').innerHTML = evt.buttons;
+		// left button
+		if(evt.which == 1) {
+			if(ptDown[0] != -1 || ptDown[1] != -1)
+				console.log('missed mouse up event');
+			ptDown = [evt.offsetX, evt.offsetY];
+			if(undefined == img)
+				img = context.getImageData(0, 0, c.width, c.height);
+		}
+	}
+	function onMouseUp(evt) {
+		document.getElementById('button').innerHTML = evt.buttons;
+		// left button?
+		if(evt.which == 1) {
+			if(ptDown[0] == -1 || ptDown[1] == -1)
+				console.log('missed mouse down event');
+			else {
+				if(undefined != img)
+					context.putImageData(img, 0, 0);
+				if(evt.altKey)
+					context.strokeRect(Math.min(evt.offsetX, ptDown[0]), Math.min(evt.offsetY, ptDown[1]), Math.abs(evt.offsetX-ptDown[0]), Math.abs(evt.offsetY - ptDown[1]));
+				else 
+					drawLine(ptDown, [evt.offsetX, evt.offsetY], evt.ctrlKey);
+				ptDown = [-1, -1];
+				img = undefined;
+			}
+		}
+	}
+	
+	function onMouseOut(evt) {
+		ptDown = [-1, -1];
+		if(undefined != img) {
+			context.putImageData(img, 0, 0);
+			img = undefined;
+		}
+	}
+	
+	function drawLine(pt0, pt1, bStraight) {
+		if(undefined == context) {
+			context = document.getElementById('draw').getContext("2d");
+		}
+		context.beginPath();
+		context.moveTo(pt0[0],pt0[1]);
+		if(bStraight == true)
+			if(Math.abs(pt0[0]-pt1[0]) < Math.abs(pt0[1]-pt1[1]))
+				context.lineTo(pt0[0],pt1[1]);
+			else
+				context.lineTo(pt1[0],pt0[1]);
+		else
+			context.lineTo(pt1[0],pt1[1]);
+		context.stroke();		
+	}
+	function clearImage(evt) {
+		if(undefined == context) {
+			context = document.getElementById('draw').getContext("2d");
+		}
+		console.log('clear');
+		if(evt == undefined)
+			console.log(evt);
+		else 
+			console.log(evt.target.id);
+		context.clearRect(0, 0, c.width, c.height);
+	}
+	
+	// define a function to be run after the page is finished loading (jquery)
+//	$(function() {
+	document.getElementById('draw').addEventListener('mousemove', onMouseMove, false);
+	document.getElementById('draw').onmousedown = onMouseDown;
+	document.getElementById('draw').onmouseup = onMouseUp;
+	document.getElementById('draw').onmouseout = onMouseOut;
+	// canvases don't support key events :(
+//	document.getElementById('draw').onkeyup = onKeyUp;
+//	document.getElementById('draw').onkeydown = onKeyUp;
+	// so we add them to the canvas parent
+	document.getElementById('draw').parentNode.addEventListener('keydown', onUpdate, false);
+	document.getElementById('draw').parentNode.addEventListener('keyup', onUpdate, false);
+	
+//	document.getElementById('clearInput').onclick = clearImage;
+	document.getElementById('clearButton').onclick = clearImage;
+//	}
+</script>
+</body>
+</html>

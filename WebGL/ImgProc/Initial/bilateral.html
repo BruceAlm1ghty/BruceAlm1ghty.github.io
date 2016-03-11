@@ -3,27 +3,29 @@
 <head>
   <title>Experimental GLSL Image Processing</title>
   <link rel="stylesheet" href="glimp.css" />
-  <script src='./jquery-1.11.0.min.js'></script>
+<script src='../../../javascript/jquery-1.11.0.min.js'></script>
 </head>
 
 <body>
 
-<h1>GLSL Gaussian Filter Demo</h1>
+<h1>GLSL Bilateral Filtering Demo</h1>
+
 <a href="./index.html"><- Return to Experimental GLSL Image Processing</a>
 
 <p>
-Gaussian filtering is a standard step in many image processing and image analysis pipelines due to its execution speed and well behaved numerical properties (differentiation). Historically, fast implementations of Gaussian filtering applied to images has utilized separability, decomposing the 2D convolution into two 1D convolution problems - one along the rows of the image and one along the columns of the image. Here, we illustrate the speed of the GPU even when convolution is not implemented using separability.  Rather, we leverage the pixel parallelism of the GPU to accelerate a brute force implementation of 2D convolution.
+Bilatering filtering is a powerful edge preserving denoising technique. However, the Bilateral filter is frequently overlooked in practice, particularly for real time applications, because it is not implemented via separable convolution. However, the Bilateral filter can take advantage of pixel parallelism, just like the <a href="./gaussian.html">Gaussian filtering example</a>.
+</p>
+
+<p>This GLSL implementation is 14 times faster than the multithreaded CPU implementation in the Insight Toolkit (<a href="http://www.itk.org">ITK</a>) on a Macbook Pro with Retina Display.
 </p>
 
 <p>(This implementation is based on the work of <a href="https://www.shadertoy.com/view/4dfGDH#">https://www.shadertoy.com/view/4dfGDH#</a>.)</p>
-
 
 <h2>Source Image</h2>
 <img id="sourceImage" src="./MRBrainTumor1_76.png"></img>
 
 <h2>Processed Image</h2>
 <canvas id=renderCanvas></canvas>
-
 
 <script id="vertexShader" type="x-shader/x-vertex">
 precision highp float;
@@ -42,16 +44,23 @@ void main(void) {
 <script id="fragmentShader" type="x-shader/x-fragment">
 precision highp float;
 
-// Gaussian filter.  Based on https://www.shadertoy.com/view/4dfGDH#
+// Bilateral filter.  Based on https://www.shadertoy.com/view/4dfGDH#
 //
 //
 #define SIGMA 10.0
+//#define BSIGMA 0.1
+#define BSIGMA 0.3
 #define MSIZE 15
 
 
 float normpdf(in float x, in float sigma)
 {
   return 0.39894*exp(-0.5*x*x/(sigma*sigma))/sigma;
+}
+
+float normpdf3(in vec3 v, in float sigma)
+{
+  return 0.39894*exp(-0.5*dot(v,v)/(sigma*sigma))/sigma;
 }
 
 uniform sampler2D sourceTextureSampler;
@@ -63,7 +72,6 @@ varying vec2 varyingTextureCoordinate;
 
 void main(void) {
   vec4 c = texture2D(sourceTextureSampler, varyingTextureCoordinate);
-  vec4 gc = c;
   vec4 bc = c;
 
   // only smooth to the right of the mouse
@@ -72,9 +80,9 @@ void main(void) {
     //declare stuff
     const int kSize = (MSIZE-1)/2;
     float kernel[MSIZE];
-    vec3 gfinal_colour = vec3(0.0);
+    vec3 bfinal_colour = vec3(0.0);
 
-    float gZ = 0.0;
+    float bZ = 0.0;
 
     //create the 1-D kernel
     for (int j = 0; j <= kSize; ++j) {
@@ -83,6 +91,8 @@ void main(void) {
 
     vec3 cc;
     float gfactor;
+    float bfactor;
+    float bZnorm = 1.0/normpdf(0.0, BSIGMA);
     //read out the texels
     for (int i=-kSize; i <= kSize; ++i)
     {
@@ -92,23 +102,19 @@ void main(void) {
         vec2 coord = varyingTextureCoordinate.xy + vec2(float(i), float(j))*sourceTexelSize.xy;
         cc = texture2D(sourceTextureSampler, coord).rgb;
 
-        // compute the gaussian smoothed
+        // compute both the gaussian smoothed and bilateral
         gfactor = kernel[kSize+j]*kernel[kSize+i];
-        gZ += gfactor;
+        bfactor = normpdf3(cc-c.rgb, BSIGMA)*bZnorm*gfactor;
+        bZ += bfactor;
 
-        gfinal_colour += gfactor*cc;
+        bfinal_colour += bfactor*cc;
       }
     }
 
-    gc = vec4(gfinal_colour/gZ, 1.0);
-    }
-
-  if (varyingTextureCoordinate.x > focusPoint.x) {
-      c = gc;
+    bc = vec4(bfinal_colour/bZ, 1.0);
   }
 
-
-  gl_FragColor = c;
+  gl_FragColor = bc;
 }
 
 </script>
@@ -119,6 +125,7 @@ void main(void) {
 var focusPoint = [0., 0.5]; // holds a value to be passed as a uniform to the shader
 
 var sourceTextureSize = [0,0];
+
 
 //
 // set up webgl
@@ -219,9 +226,7 @@ function render() {
 // initialize after load is complete
 $(function () {
   // once the image is loaded, setup the texture and start the loop
-  sourceTextureImage.crossOrigin = "anonymous";
-//  sourceTextureImage.src = "./MRBrainTumor1_76.png";
-  sourceTextureImage.src = document.getElementById("sourceImage").src;
+  sourceTextureImage.src = "./MRBrainTumor1_76.png";
   sourceTextureImage.onload = function () {
     setupSourceTexture();
     renderCanvas.height = sourceTextureImage.height;
@@ -241,7 +246,7 @@ $(function () {
 </script>
 
 <p>
-Move pointer over the lower image. As you move the mouse, the left side of the image is unfiltered, the right side is Gaussian filtered.
+Move pointer over the lower image. As you move the mouse, the left side of the image is unfiltered, the right side is Bilateral filtered. A comparison of Gaussian and Bilateral filtering is <a href="./gaussian+bilateral.html">here</a>.
 <br><br>
 Check out <a href='https://github.com/millerjv/sites/tree/gh-pages/glimp'>the source code</a>.
 </p>

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>It's all a blur</title>
+	<script src="../gl-setup.js"></script>
+</head>
+<body>
+<div id="nav">
+<a href="index.html">Up</a>
+<a href="VariableGaussian.html">Next - Variable Gaussian</a>
+</div>
+
+A simple gaussian blur operator
+
+	<h2>Source Image</h2>
+	<img id="sourceImage" src="Initial/MRBrainTumor1_76.png"></img>
+	
+	<h2>Processed Image</h2>
+	<canvas id="renderCanvas"></canvas>
+
+	<script id="vertexShader" type="x-shader/x-vertex">
+		precision highp float;
+		attribute vec3 coordinate;
+		attribute vec2 textureCoordinate;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+			gl_Position = vec4(coordinate,1.);
+			varyingTextureCoordinate = textureCoordinate;
+		}
+	</script>
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision highp float;
+
+		// Gaussian filter.  Based on https://www.shadertoy.com/view/4dfGDH#
+		#define SIGMA 10.0
+		#define MSIZE 5
+
+		float normpdf(in float x, in float sigma) {
+  			return 0.39894*exp(-0.5*x*x/(sigma*sigma))/sigma;
+		}
+
+		uniform sampler2D sourceTextureSampler;
+		uniform vec2 sourceTextureSize;
+		uniform vec2 sourceTexelSize;
+		uniform vec2 focusPoint;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+  			vec4 c = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+  			vec4 gc = c;
+  			vec4 bc = c;
+
+		  	// only smooth to the right of the mouse
+//  			if (varyingTextureCoordinate.x > focusPoint.x) {
+			    //declare stuff
+			    const int kSize = (MSIZE-1)/2;
+    			float kernel[MSIZE];
+    			vec3 gfinal_colour = vec3(0.0);
+
+    			float gZ = 0.0;
+
+    			//create the 1-D kernel
+	  			for (int j = 0; j <= kSize; ++j) {
+      				kernel[kSize+j] = kernel[kSize-j] = normpdf(float(j), SIGMA);
+    			}
+
+			    vec3 cc;
+    			float gfactor;
+    			//read out the texels
+    			for (int i=-kSize; i <= kSize; ++i) {
+      				for (int j=-kSize; j <= kSize; ++j) {
+        				// color at pixel in the neighborhood
+        				vec2 coord = varyingTextureCoordinate.xy + vec2(float(i), float(j))*sourceTexelSize.xy;
+        				cc = texture2D(sourceTextureSampler, coord).rgb;
+				        // compute the gaussian smoothed
+	       				gfactor = kernel[kSize+j]*kernel[kSize+i];
+        				gZ += gfactor;
+			        	gfinal_colour += gfactor*cc;
+      				}
+    			}
+		 	   	gc = vec4(gfinal_colour/gZ, 1.0);
+ //   		}
+//			if (varyingTextureCoordinate.x > focusPoint.x) {
+      			c = gc;
+// 			}
+			gl_FragColor = c;
+		}
+	</script>
+
+	<script>
+		'use strict';
+//		var focusPoint = [ 0., 0.5 ]; // holds a value to be passed as a uniform to the shader
+//		var sourceTextureSize = [ 0, 0 ];
+
+		// the context
+		var glContext = initCanvasById('renderCanvas');
+		console.log(glContext);
+		// the program and shaders
+		var glProgram = initProgramById(glContext, 'vertexShader', 'fragmentShader');
+		console.log(glProgram);
+		
+		// our vertices are simply four corners of a square
+		// create a buffer, and populate it, to store the data
+		var vertexBuffer = pushFloats(glContext,
+				[ 
+		           -1., -1.,  0., 
+		            1., -1.,  0., 
+		           -1.,  1.,  0., 
+		            1.,  1.,  0. 
+		        ]);
+		var coordinateLocation = bufferToAttribute(glContext, glProgram, "coordinate", vertexBuffer, 3);
+	
+		
+		// create a buffer of texture coordinates, another square, in 2D
+		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	1, 0, 	0, 1, 	1, 1 ]); 
+		var textCoordLoc = bufferToAttribute(glContext, glProgram, "textureCoordinate", textureCoordBuffer, 2);
+
+		var sourceTextureImage = new Image();
+		var texture;
+		sourceTextureImage.crossOrigin = "anonymous";
+		sourceTextureImage.src = document.getElementById("sourceImage").src;
+		sourceTextureImage.onload = function() {
+			// after the image loads, convert it to a texture
+			texture = imageToTexture(glContext, this);
+			console.log(texture);
+			// the sourceTexture
+			glContext.activeTexture(glContext.TEXTURE0);
+			glContext.bindTexture(glContext.TEXTURE_2D, texture);
+			glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
+			// adjust for the texture size
+			// set up the sourceTextureSize
+			glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTextureSize"), sourceTextureImage.width, sourceTextureImage.height);
+			// set up the sourceTexelSize
+			glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
+		
+			glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
+			
+			render()
+		};
+		console.log(texture);
+		
+		function render() {
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			// the primitive
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+		}
+	</script>
+
+</body>
+</html>
