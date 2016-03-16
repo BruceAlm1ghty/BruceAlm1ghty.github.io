@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Over the Edge</title>
+	<script src="../gl-setup.js"></script>
+	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/graph2d.js'></script>
+</head>
+<body>
+<div id="nav">
+<a href="Edge.html">Back - Edge</a>
+<a href="index.html">Up</a>
+</div>
+<h1>Edge extraction, Thresholding and Thinning (Skeletonization)</h1>
+<ul>
+<li>First pass (optional) performs a <a href="https://en.wikipedia.org/wiki/Sobel_operator">Sobel</a> operation extracting edges</li>
+<li> Second pass, if the mouse is over the histogram, performs a binary threshold of the image at the mouse-over value, otherwise any non-zero pixel is used</li>
+<li> Iteratively perform 8-connected thinning passes until no further pixels are deleted, total number of thinning passes is shown</li>
+<ul>
+<li>Each thinning pass involves 8 GL iterations, one check of each 4-connected neighbor marking pixels for removal, and interleaving 4 passes to remove marked pixels</li>
+<li>The algorithm terminates when no pixels are marked for removal after a pass (64 pass maximum for performance)</li>
+<li>The alpha channel is used to flag input pixels and pixels for removal
+</ul>
+</ul>
+
+	<h3>Source Image</h3>
+	<input type="file" accept="image/*" id="files" />
+	<br>
+	<img id="sourceImage" src="Initial/MRBrainTumor1_76.png"></img>
+	<br><input type="checkbox" checked="checked" id="doSobel" onchange="onSobel()" >Perform Sobel (Calculate Edges)
+	
+	<h3>Input<span id="sobelLabel"> (Sobel)</span> Image</h3>
+	<canvas id="sobelImage"></canvas>
+	
+	<h3>Threshold Image</h3>
+	<canvas id="threshImage"></canvas>
+	
+	<h3>Thinned Image</h3>
+	<table>
+		<tr>
+			<td rowspan="9"><canvas id="renderCanvas"></canvas></td>
+			<td>Threshold At: <span id="ktext"></span></td>
+		</tr><tr>
+			<td>Thinning Passes: <span id="nPass"></span></td>
+		</tr><tr>
+			<td>Time: <span id="nTime"></span>ms</td>
+		</tr><tr>
+			<th style="text-align:left;">Histogram - Input Image</th>
+		</tr><tr>
+			<td>Zero Pixels: <span id="nzero"></span>, Max: <span id='nmax'></span></td>
+		</tr><tr>
+			<td rowspan="4" style="padding: 0px;border: 1px solid black;"><canvas id='kgraph' height="100" width="256"></canvas></td>
+		</tr>
+	</table>
+	
+	<script id="vertexShader" type="x-shader/x-vertex">
+		precision highp float;
+		attribute vec3 coordinate;
+		attribute vec2 textureCoordinate;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+			gl_Position = vec4(coordinate,1.);
+			varyingTextureCoordinate = textureCoordinate;
+		}
+	</script>
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision highp float;
+		uniform sampler2D sourceTextureSampler;
+		uniform vec2 sourceTextureSize;
+		uniform vec2 sourceTexelSize;
+		uniform vec2 focusPoint;
+		uniform int nIteration;
+		uniform float fThreshold;
+		uniform int accepts[48];
+		uniform bool bLast;
+		varying vec2 varyingTextureCoordinate;
+
+		// checks if a pixel is skeletal
+		bool skeletal(in bool b[8]) {
+			//neigbors are defined in the following order
+			// 5	1	4
+			// 2	x	0
+			// 6	3	7
+			//such that this can be used for four connected or eight connected regions
+			// acceptance test for edge element
+			// same order as neighbor
+			// pixel must be false at 0's
+			// pixel must be true at atleast one 1 and one 2
+			// flags to track 1 and 2 location tests
+			bool m[2];
+			// for each of the six possible conditions
+			for (int k = 0; k < 48; k += 8) {
+				m[0] = m[1] = false;
+				// check the pixels
+				for (int j = 0; j < 8; ++j) {
+					// there's a pixel here
+					if(b[j]) {
+						// and there must be no edge element for this criterion, stop checking
+						if (accepts[k+j] == 0) {
+							m[0] = m[1] = false;
+							break;
+						}
+						// if an element is present where we need it, flag this true
+						else if(accepts[k+j] == 1) m[0] = true;
+						else m[1] = true;
+					}
+				}
+				// if we found edge elements in both necessary places we're done
+				if (m[0] && m[1]) return true;
+			}
+			return false;
+		}
+
+		// oh who are the people in your neighborhood, in your neighborhood, in your neighborhood, the people that you meet each day
+		void populateNeighbors(in sampler2D samp, in vec2 pt, in vec2 step, out vec3 neighbors[8]) {
+			vec2 ptR = vec2(step.x, 0); // one pixel right
+			vec2 ptU = vec2(0, step.y); // one pixel up
+			// pixels in the neighborhood -- see skeletal above
+       		neighbors[4] = texture2D(samp, pt.xy + step.xy).rgb;
+       		neighbors[6] = texture2D(samp, pt.xy - step.xy).rgb;
+       		neighbors[5] = texture2D(samp, pt.xy + ptU - ptR).rgb;
+       		neighbors[7] = texture2D(samp, pt.xy - ptU + ptR).rgb;
+       		neighbors[3] = texture2D(samp, pt.xy - ptU).rgb;
+       		neighbors[1] = texture2D(samp, pt.xy + ptU).rgb;
+       		neighbors[2] = texture2D(samp, pt.xy - ptR).rgb;
+       		neighbors[0] = texture2D(samp, pt.xy + ptR).rgb;
+		}
+
+		void classifyNeighbors(in vec3 neighbors[8], out bool b[8]) {
+			for(int i = 0; i < 8; ++i)
+				b[i] = neighbors[i].r > 0.0 || neighbors[i].g > 0.0 || neighbors[i].b > 0.0;
+		}
+
+		float sobelNeighbors(in vec3 neighbors[8]) {
+			// x and y numeric gradients
+			vec3 gy = (neighbors[4] + neighbors[5] + neighbors[1] + neighbors[1]) - (neighbors[6] + neighbors[7] + neighbors[3] + neighbors[3]);
+			vec3 gx = (neighbors[4] + neighbors[7] + neighbors[0] + neighbors[0]) - (neighbors[5] + neighbors[6] + neighbors[2] + neighbors[2]);
+			// gradient magnitude
+			return 0.15 * sqrt(dot(gx, gx) + dot(gy, gy));
+		}
+
+		void main(void) {
+			// any negative iteration other than -1 or -2 is a pass-thru
+			if(nIteration == -2) {
+				bool b[8];
+				vec3 neighbors[8];
+				// first pass
+				// sobel / edge
+				// the first iteration replaces the pixel value with the Sobel (gradient) value as a grayscale
+				populateNeighbors(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize, neighbors);
+				float g = sobelNeighbors(neighbors);
+				if(g > 1.0) g = 1.0;
+		 	   	gl_FragColor = vec4(g, g, g, 1.0);
+			} else {
+				vec4 p = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+				if(nIteration == -1) {
+					// Thresholding
+					float fx = 0.0; //sourceTexelSize.x * 1.6; // edge tolerance
+					float fy = 0.0; //sourceTexelSize.y * 1.6; // edge tolerance
+					// second pass, threshold
+					// we will also use the alpha value to flag candidate skeletal pixels, 0.75 -> possible edge, 1.0 -> skeletal pixel, 0.50 -> targetted for termination
+					if(fThreshold < 0.0) {
+						// no threshold, flag any non-zero pixel
+						if(p.r > 0.0 || p.g > 0.0 || p.b > 0.0) 
+							p.a = (varyingTextureCoordinate.x < fx || varyingTextureCoordinate.y < fy 
+									|| (1.0 - varyingTextureCoordinate.x) < fx || (1.0 - varyingTextureCoordinate.y) < fy) ? 1.0 : 0.75;
+					} else {
+						// threshold, flag any pixel equal or above, set its color to white
+						if(p.r >= fThreshold || p.g >= fThreshold || p.b >= fThreshold)
+							p = vec4(1.0, 1.0, 1.0, 
+									// edge pixels need not apply
+									(varyingTextureCoordinate.x < fx || varyingTextureCoordinate.y < fy
+									|| (1.0 - varyingTextureCoordinate.x) < fx || (1.0 - varyingTextureCoordinate.y) < fy) ? 1.0 : 0.75);
+						else p = vec4(0.0, 0.0, 0.0, 1.0);
+					}
+				} else if(nIteration >= 0) {
+					// thinning passes
+					if(nIteration == 1 || nIteration == 3 || nIteration == 5 || nIteration == 7) {
+						// odd iterations remove pixels marked for deletion
+						// in the final iteration, remove any remaining candidate edges that have not be marked
+						if(p.a < 0.66 || (bLast && p.a < 0.85))
+							// I was flagged for clearing
+							p = vec4(0.0, 0.0, 0.0, 1.0);
+							if(bLast) p.a = 1.0;
+					} else {
+						// is a candidate edge pixel here?
+						if(p.a < 0.85) {
+							bool b[8];
+							vec3 neighbors[8];
+							// look at its neighbors 
+							populateNeighbors(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize, neighbors);
+							classifyNeighbors(neighbors, b);
+							// do I NOT have a neighbor in the specified direction
+							if((nIteration == 0 && b[0] == false) || (nIteration == 2 && b[1] == false) || (nIteration == 4 && b[2] == false) || (nIteration == 6 && b[3] == false)) { 
+								// I do NOT, am I a skeletal pixel
+								if(skeletal(b)) p.a = 1.0; // mark me as such
+								else p.a = 0.50;  // mark me for clearing
+							}
+						}
+					}
+				}
+				gl_FragColor = p;
+			}
+		}
+	</script>
+
+	<script>
+		'use strict';
+		var focusPoint = [ 0., 0.5 ]; // holds a value to be passed as a uniform to the shader
+		// var sourceTextureSize = [ 0, 0 ];
+
+		// the context
+		var glContext = initCanvasById('renderCanvas');
+		// the shader texts
+		var textFragShader = document.getElementById('fragmentShader').innerText;
+		var textVertShader = document.getElementById('vertexShader').innerText;
+		// the program and shaders
+		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+		var fThreshLoc = glContext.getUniformLocation(glProgram, "fThreshold");
+		var nIterLoc = glContext.getUniformLocation(glProgram, "nIteration");
+		var nLastLoc = glContext.getUniformLocation(glProgram, "bLast");
+		var fThresh = -1.0;
+		var ctxGraph = document.getElementById('kgraph').getContext('2d');
+		var nPassText = document.getElementById('nPass');
+		var doSobel = document.getElementById('doSobel');
+		var eTime = document.getElementById('nTime');
+		var sobelLabel = document.getElementById('sobelLabel');
+
+		var ctxSobel = document.getElementById('sobelImage').getContext('2d');
+		var sobelImage;
+
+		var ctxThresh = document.getElementById('threshImage').getContext('2d');
+		var threshImage;
+	
+		// skeletal pixel acceptance tests
+		//neigbors are defined in the following order
+		// 5	1	 4
+		// 2	.	 0
+		// 6	3	 7
+		//such that this can be used for four connected or eight connected regions
+		// neighbor pixel must be false at 0's
+		// neighbor pixel must be true at atleast one 1 and one 2
+		var accepts = [
+			0, 1, 0, 2, 1, 1, 2, 2,
+			2, 0, 1, 0, 2, 1, 1, 2,
+			0, 1, 1, 0, 1, 1, 1, 2,
+			0, 0, 1, 1, 2, 1, 1, 1,
+			1, 0, 0, 1, 1, 2, 1, 1,
+			1, 1, 0, 0, 1, 1, 2, 1
+		];
+		glContext.uniform1iv(glContext.getUniformLocation(glProgram, 'accepts[0]'), new Int32Array(accepts));
+		
+		// our vertices are simply four corners of a square
+		// create a buffer, and populate it, to store the data
+		var vertexBuffer = pushFloats(glContext,
+				[ 
+		           -1., -1.,  0., 
+		            1., -1.,  0., 
+		           -1.,  1.,  0., 
+		            1.,  1.,  0. 
+		]);
+		// create a buffer of texture coordinates, another square, in 2D
+		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	1, 0, 	0, 1, 	1, 1 ]);
+		// set the vertex and texture coordinate attributes
+		bufferToAttribute(glContext, glProgram, "coordinate", vertexBuffer, 3);
+		bufferToAttribute(glContext, glProgram, "textureCoordinate", textureCoordBuffer, 2);
+
+		// load and set up the image to process in a texture
+		var sourceTextureImage = new Image();
+		var texture;
+		sourceTextureImage.crossOrigin = "anonymous";
+		sourceTextureImage.src = document.getElementById("sourceImage").src;
+		sourceTextureImage.onload = function() {
+			// after the image loads, convert it to a texture
+			texture = imageToTexture(glContext, this);
+			// size the output canvas
+			glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
+			setupTexture(glContext, glProgram, texture);
+			render();
+		};
+
+		var pixels;
+		
+		// intermediate image/texture
+		var textureEdges;
+		var framebuffer = glContext.createFramebuffer();
+		// creates a texture of the appropriate size, and binds it to the frame buffer supplied
+		function setupFrameBuffer(glContext, w, h, fb) {
+			// create a texture for the framebuffer
+			var textureLocal = imageToTexture(glContext, w, h);
+			// set the framebuffer as the target
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, fb);
+			// attach texture to frame buffer
+			// gl.COLOR_ATTACHMENT0: Attaches the texture to the framebuffer's color buffer
+			// texture is a 2D image
+		    glContext.framebufferTexture2D(glContext.FRAMEBUFFER, glContext.COLOR_ATTACHMENT0, glContext.TEXTURE_2D, textureLocal, 0);
+			return textureLocal;
+		}
+		
+		var texturesThin = [];
+		var fbThin = [glContext.createFramebuffer(), glContext.createFramebuffer() ];
+		
+		// after the source image has been loaded, source image/texture
+		function setupTexture(glContext, glProgram, texture) {
+			if(undefined != glContext && undefined != glProgram && undefined != texture) {
+				// adjust for the texture size
+				// set up the sourceTextureSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTextureSize"), sourceTextureImage.width, sourceTextureImage.height);
+				// set up the sourceTexelSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
+				// an array to grab to intermediate pixels				
+				pixels = new Uint8Array(sourceTextureImage.width * sourceTextureImage.height * 4);
+				// the sourceTexture bound to texture 0
+				glContext.activeTexture(glContext.TEXTURE0);
+				// now a frame buffer to render the sobel to 
+				textureEdges = setupFrameBuffer(glContext, sourceTextureImage.width, sourceTextureImage.height, framebuffer);
+				// now frame buffers to render the thinning to				
+				texturesThin[0] = setupFrameBuffer(glContext, sourceTextureImage.width, sourceTextureImage.height, fbThin[0]);
+				texturesThin[1] = setupFrameBuffer(glContext, sourceTextureImage.width, sourceTextureImage.height, fbThin[1]);
+				
+				sobelImage = ctxSobel.createImageData(sourceTextureImage.width, sourceTextureImage.height);
+				ctxSobel.canvas.width = sourceTextureImage.width, ctxSobel.canvas.height = sourceTextureImage.height;
+				threshImage = ctxThresh.createImageData(sourceTextureImage.width, sourceTextureImage.height);
+				ctxThresh.canvas.width = sourceTextureImage.width, ctxThresh.canvas.height = sourceTextureImage.height;
+			}
+		}
+		
+		function handleFileSelect(evt) {
+			evt.stopPropagation();
+			evt.preventDefault();
+   			readFiles(evt.target.files);
+		}
+		function readFiles(files) {
+			var f;
+			if(files instanceof FileList) {
+				if(files.length > 0) f = files[0];
+			} else if(files instanceof File)
+				f = files;
+			if(undefined != f) {
+				// Only process image files.
+ 				if (f.type.match('image.*')) {
+ 					/*
+ 					FileReader includes four options for reading a file, asynchronously:
+					FileReader.readAsBinaryString(Blob|File) - The result property will contain the file/blob's data as a binary string. Every byte is represented by an integer in the range [0..255].
+					FileReader.readAsText(Blob|File, opt_encoding) - The result property will contain the file/blob's data as a text string. By default the string is decoded as 'UTF-8'. Use the optional encoding parameter can specify a different format.
+					FileReader.readAsDataURL(Blob|File) - The result property will contain the file/blob's data encoded as a data URL.
+					FileReader.readAsArrayBuffer(Blob|File) - The result property will contain the file/blob's data as an ArrayBuffer object.
+					*/
+ 					var reader = new FileReader();
+ 					reader.onloadend = function() {
+ 						document.getElementById('sourceImage').src = this.result;
+ 						sourceTextureImage.src = document.getElementById("sourceImage").src;
+ 					}
+					reader.readAsDataURL(f);
+		  		} else {
+		  			console.log(f.type);
+		  		}
+			}
+		}
+		document.getElementById('files').addEventListener('change', handleFileSelect, false);
+		
+		var hist = new Array(256);
+		function updateHist() {
+			if(undefined != pixels) {
+				glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+				updateHistX(pixels);
+			}
+		}
+		function updateHistX(pixels) {
+			if(undefined != pixels) {
+				var mx = 0, t = 0;
+				hist.fill(0);
+				var i = 0; // document.getElementById('channel').selectedIndex;
+				for(var ix = pixels.length; i < ix; i += 4) {
+					t = pixels[i];
+					if(t > mx) mx = t;
+					++hist[t];
+				}
+				document.getElementById('nzero').innerHTML = hist[0];
+				hist[0] = 0;
+				document.getElementById('nmax').innerHTML = Math.max(...hist);
+				drawBarGraph(ctxGraph, hist);
+				//ctxGraph.fillStyle='#00FF00';
+				//drawLineGraph(ctxGraph, hist, 7);
+			}
+		}
+		// watch for changes in the channel selection
+		//document.getElementById('channel').addEventListener('change', function() { updateHistX(pixels); }, false);
+		
+		function render() {
+			var tStart = Date.now();
+			
+			// update the focus point
+			glContext.uniform2f(glContext.getUniformLocation(glProgram, "focusPoint"), focusPoint[0], focusPoint[1]);
+			glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			// render the primitive
+			// first pass is edge operator (fThres < 0)
+			
+			glContext.uniform1i(nIterLoc, doSobel.checked ? -2 : -3);
+			glContext.uniform1f(fThreshLoc, -1.0);
+			// our input image
+		    glContext.bindTexture(glContext.TEXTURE_2D, texture);
+			// render to the framebuffer and intermediate texture 
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, framebuffer);
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+	
+			updateHist();
+			copyFlipY(pixels, sobelImage.data, sobelImage.width * 4);
+			ctxSobel.putImageData(sobelImage, 0, 0);
+			
+			// second pass
+			glContext.uniform1i(nIterLoc, -1);
+			glContext.uniform1f(fThreshLoc, fThresh);
+			// our intermediate image
+			glContext.bindTexture(glContext.TEXTURE_2D, textureEdges);
+			// use the canvas frame buffer for last render
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, fbThin[0]);
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+
+			glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+			copyFlipY(pixels, threshImage.data, threshImage.width * 4);
+			ctxThresh.putImageData(threshImage, 0, 0);
+	
+			var nMaxPass = 64;
+			var bDone = false, nMax = 8 * nMaxPass - 1, nIter = 0, nCnt = 0, nPass = 0;
+			// now thin
+			for(; nIter <= nMax; ++nIter) {
+				// set the iteration
+				glContext.uniform1i(nIterLoc, nIter % 8);
+				glContext.uniform1i(nLastLoc, bDone || nIter == nMax);
+				// our intermediate image
+				glContext.bindTexture(glContext.TEXTURE_2D, texturesThin[nIter % 2]);
+				// use the canvas frame buffer for last render
+				glContext.bindFramebuffer(glContext.FRAMEBUFFER, bDone == true || nIter == nMax ? null : fbThin[1 - (nIter % 2)]);
+				glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+				glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+				if(bDone) break;
+				// count the number of pixels flagged for clearing
+				if((nIter & 1) == 0 && nCnt == 0) {
+					glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+					for(var i = 3, ix = glContext.canvas.width * glContext.canvas.height * 4; i < ix; i += 4)
+						// we really just need at least one pixel flagged
+						if(pixels[i] < 135) { ++nCnt; break; }
+				}
+				// if we've checked all four connected pixels 
+				if((nIter % 8) == 6) {
+					++nPass;
+					// nobody was flagged for clearing, we're done
+					if(nCnt == 0) bDone = true;
+					// pixels were flagged, reset and keep looping
+					else nCnt = 0;
+				}
+			}
+			eTime.innerHTML = (Date.now() - tStart);
+			if(nIter > nMax)
+				nPassText.innerHTML = nPass + ' <b>MAX</b> (GL renders ' + (nPass * 8 + 2) + ')';
+			else
+				nPassText.innerHTML = nPass + ' (GL renders ' + (nPass * 8 + 2) + ')';
+		}
+		
+		var XText = document.getElementById('ktext'); 
+		function onMouseMove(evt) {
+			focusPoint = [ evt.offsetX / sourceTextureImage.width,
+							1. - (evt.offsetY / sourceTextureImage.height) ];
+			XText.innerHTML = focusPoint[0];
+			render();
+		}
+	//	document.getElementById('renderCanvas').addEventListener('mousemove', onMouseMove, false);
+	
+		// if we leave the graph, stop thresholding
+		function onMouseOutGraph() {
+			fThresh = -1.0;
+			XText.innerHTML = 'None';
+			render();
+		}
+		XText.innerHTML = 'None';
+		ctxGraph.canvas.onmouseout = onMouseOutGraph;
+		
+		// if we're over the histgram, use the mouse point X position as a threshold value
+		ctxGraph.canvas.addEventListener('mousemove', function(evt) {
+			fThresh = evt.offsetX / evt.target.width;
+			XText.innerHTML = fThresh;
+			render();
+		}, false);
+
+		function onSobel() {
+			if(doSobel.checked)
+				sobelLabel.innerHTML = " (Sobel)";
+			else sobelLabel.innerHTML = "";
+			render();
+		}
+		// render after document loaded (jQuery syntax)
+		$(function(){
+			// if the image is loaded and ready, render it
+			if(undefined != textureEdges) render();
+		});
+	</script>
+
+</body>
+</html>

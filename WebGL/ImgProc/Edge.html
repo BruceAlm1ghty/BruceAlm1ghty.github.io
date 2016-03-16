@@ -9,12 +9,16 @@
 </head>
 <body>
 <div id="nav">
-<a href="VariableGaussian.html">Back - Variable Gaussian</a>
+<a href="Sobel.html">Back - Sobel</a>
 <a href="index.html">Up</a>
-<a href="Edge.html">Next - Edge Extraction</a>
+<a href="Thin.html">Next - Thin</a>
 </div>
 
-<a href="https://en.wikipedia.org/wiki/Sobel_operator">A Sobel (gradient) filter</a>
+Render an image in two passes.  The first pass performs a <a href="https://en.wikipedia.org/wiki/Sobel_operator">Sobel</a> operation extracting edges, 
+the second pass will threshold the image at a certain value.  
+We need two passes because want to extract the pixel values before thresholding to display a histogram
+of values.  Mouse over the histogram to change the threshold value.  Mouse out of the histogram to show the image without thresholding.   
+
 	<h2>Source Image</h2>
 	<input type="file" accept="image/*" id="files" />
 	<br>
@@ -60,7 +64,10 @@
 		uniform vec2 sourceTextureSize;
 		uniform vec2 sourceTexelSize;
 		uniform vec2 focusPoint;
+		//uniform int nIteration;
+		uniform float fThreshold;
 		varying vec2 varyingTextureCoordinate;
+		uniform bool bDone;
 
 		float sobel(sampler2D samp, vec2 pt, vec2 step) {
 			vec2 ptR = vec2(step.x, 0); // one pixel right
@@ -78,16 +85,20 @@
 			vec3 gx = (cTR + cR + cR + cBR) - (cTL + cL + cL + cBL);
 			vec3 gy = (cBL + cB + cB + cBR) - (cTL + cT + cT + cTR);
 			// gradient magnitude
-			// scaling is 1/(4 * sqrt(3)) ~ 0.15
 			return 0.25 * sqrt(dot(gx, gx) + dot(gy, gy));
 		}
 		void main(void) {
-			if(varyingTextureCoordinate.x >= focusPoint.x) {
-				float g = sobel(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize);
+			float g = 0.0;
+			if(fThreshold < 0.0) {
+				// first pass
+				// sobel / edge
+				g = sobel(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize);
 				if(g > 1.0) g = 1.0;
-		 	   	gl_FragColor = vec4(g, g, g, 1.0);
-	   		} else 
-				gl_FragColor = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+			} else {
+				// second pass, threshold
+				g = (texture2D(sourceTextureSampler, varyingTextureCoordinate).r >= fThreshold) ? 1.0 : 0.0;
+			}
+	 	   	gl_FragColor = vec4(g, g, g, 1.0);
 		}
 	</script>
 
@@ -98,12 +109,16 @@
 
 		// the context
 		var glContext = initCanvasById('renderCanvas');
+		// the shader texts
+		var textFragShader = document.getElementById('fragmentShader').innerText;
+		var textVertShader = document.getElementById('vertexShader').innerText;
 		// the program and shaders
-		var glProgram = initProgramById(glContext, 'vertexShader', 'fragmentShader');
-		// the histogram	
+		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+		var fThreshLoc = glContext.getUniformLocation(glProgram, "fThreshold");
+		var fThresh = -1.0;
 		var ctxGraph = document.getElementById('kgraph').getContext('2d');
 		
-		// our vertices are simply four corners of a square (rendered as two triangles)
+		// our vertices are simply four corners of a square
 		// create a buffer, and populate it, to store the data
 		var vertexBuffer = pushFloats(glContext,
 				[ 
@@ -124,20 +139,31 @@
 		sourceTextureImage.crossOrigin = "anonymous";
 		sourceTextureImage.src = document.getElementById("sourceImage").src;
 		sourceTextureImage.onload = function() {
-			if(this.width > 2048 || this.height > 2048)
-				alert('image too large to process');
-			else {
-				// after the image loads, convert it to a texture
-				texture = imageToTexture(glContext, this);
-				// size the output canvas
-				glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
-				setupTexture(glContext, glProgram, texture);
-				render();
-			}
+			// after the image loads, convert it to a texture
+			texture = imageToTexture(glContext, this);
+			// size the output canvas
+			glContext.viewport(0, 0, glContext.canvas.width = sourceTextureImage.width, glContext.canvas.height = sourceTextureImage.height);
+			setupTexture(glContext, glProgram, texture);
+			render();
 		};
 
 		var pixels;
 		
+		// intermediate image/texture
+		var textureEdges;
+		var framebuffer = glContext.createFramebuffer();
+		function setupFrameBuffer(glContext, w, h) {
+			// create a texture for the framebuffer
+			textureEdges = imageToTexture(glContext, w, h);
+			// set the framebuffer as the target
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, framebuffer);
+			// attach texture to frame buffer
+			// gl.COLOR_ATTACHMENT0: Attaches the texture to the framebuffer's color buffer
+			// texture is a 2D image
+		    glContext.framebufferTexture2D(glContext.FRAMEBUFFER, glContext.COLOR_ATTACHMENT0, glContext.TEXTURE_2D, textureEdges, 0);
+		}
+		
+		// source image/texture
 		function setupTexture(glContext, glProgram, texture) {
 			if(undefined != glContext && undefined != glProgram && undefined != texture) {
 				// the sourceTexture
@@ -151,6 +177,8 @@
 				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
 				
 				pixels = new Uint8Array(sourceTextureImage.width * sourceTextureImage.height * 4);
+				
+				setupFrameBuffer(glContext, sourceTextureImage.width, sourceTextureImage.height);
 			}
 		}
 		
@@ -192,6 +220,11 @@
 		function updateHist() {
 			if(undefined != pixels) {
 				glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+				updateHistX(pixels);
+			}
+		}
+		function updateHistX(pixels) {
+			if(undefined != pixels) {
 				var mx = 0, t = 0;
 				hist.fill(0);
 				var i = document.getElementById('channel').selectedIndex;
@@ -209,26 +242,57 @@
 			}
 		}
 		// watch for changes in the channel selection
-		document.getElementById('channel').addEventListener('change', updateHist, false);
+		document.getElementById('channel').addEventListener('change', function() { updateHistX(pixels); }, false);
 		
 		function render() {
 			// update the focus point
 			glContext.uniform2f(glContext.getUniformLocation(glProgram, "focusPoint"), focusPoint[0], focusPoint[1]);
 			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
 			// render the primitive
+			// first pass is edge operator (fThres < 0)
+			glContext.uniform1f(fThreshLoc, -1.0);
+			// our input image
+		    glContext.bindTexture(glContext.TEXTURE_2D, texture);
+			// render to the framebuffer and intermediate texture 
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, framebuffer);
 			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
 			updateHist();
+			// second pass
+			glContext.uniform1f(fThreshLoc, fThresh);
+			// our intermediate image
+			glContext.bindTexture(glContext.TEXTURE_2D, textureEdges);
+			// use the canvas frame buffer for last render
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, null);
+			glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
 		}
+		
+		var XText = document.getElementById('ktext'); 
 		function onMouseMove(evt) {
 			focusPoint = [ evt.offsetX / sourceTextureImage.width,
 							1. - (evt.offsetY / sourceTextureImage.height) ];
-			document.getElementById('ktext').innerHTML = focusPoint[0];
+			XText.innerHTML = focusPoint[0];
 			render();
 		}
 		document.getElementById('renderCanvas').addEventListener('mousemove', onMouseMove, false);
+	
+		// if we leave the graph, stop thresholding
+		function onMouseOutGraph() {
+			fThresh = -1.0;
+			render();
+		}
+		ctxGraph.canvas.onmouseout = onMouseOutGraph;
+		
+		// if we're over the histgram, use the mouse point X position as a threshold value
+		ctxGraph.canvas.addEventListener('mousemove', function(evt) {
+			fThresh = evt.offsetX / evt.target.width;
+			XText.innerHTML = fThresh;
+			render();
+		}, false);
+
 		// render after document loaded (jQuery syntax)
 		$(function(){
-			render();
+			// if the image is loaded and ready, render it
+			if(undefined != textureEdges) render();
 		});
 	</script>
 

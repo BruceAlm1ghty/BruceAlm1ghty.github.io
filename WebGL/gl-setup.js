@@ -9,8 +9,8 @@ function initCanvas(canvas) {
 		console.log(c); 
 		return undefined;
 	}
-	var glContext = canvas.getContext("webgl", {preserveDrawingBuffer: true});
-//	var glContext = canvas.getContext("webgl");
+//	var glContext = canvas.getContext("webgl", {preserveDrawingBuffer: true});
+	var glContext = canvas.getContext("webgl");
 	if (glContext == undefined) {
 		console.log('bad context')
 		return undefined;
@@ -82,7 +82,9 @@ function initProgramById(glContext, vertexShader, fragmentShader) {
 	return initProgram(glContext, document.getElementById(vertexShader).innerHTML, document.getElementById(fragmentShader).innerHTML);
 }
 
-// returns a WebGLBuffer
+/**
+ * returns a new float32 glBuffer with its data set to values
+ */
 function pushFloats(glContext, values) {
 	var buffer = glContext.createBuffer();
 	glContext.bindBuffer(glContext.ARRAY_BUFFER, buffer);
@@ -91,20 +93,38 @@ function pushFloats(glContext, values) {
 }
 
 // the image must be loaded!
-// returns a WebGLTexture
-function imageToTexture(glContext, image) {
+/**
+ * returns the glTexture
+ * creates a glTexture of the specified size or
+ * sets up a javascript image as a webGL texture 
+ */
+function imageToTexture(glContext, image_or_width, height) {
 	var texture = glContext.createTexture();
+	// make texture the active texture/target of future operations
 	glContext.bindTexture(glContext.TEXTURE_2D, texture);
+	// Sets pixel storage modes for readPixels and unpacking of textures with texImage2D and texSubImage2D .	
 	glContext.pixelStorei(glContext.UNPACK_FLIP_Y_WEBGL, true);
-	glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, glContext.RGBA, glContext.UNSIGNED_BYTE, image);
+	// put the image data into the texture
+	if(undefined == height)
+		glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, glContext.RGBA, glContext.UNSIGNED_BYTE, image_or_width);
+	else
+	      glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, image_or_width, height, 0, glContext.RGBA, glContext.UNSIGNED_BYTE, null);
+	// how to zoom the texture
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MAG_FILTER, glContext.LINEAR);
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MIN_FILTER, glContext.LINEAR);
+	// how to handle coordinates outside of the texture
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_S, glContext.CLAMP_TO_EDGE);
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_T, glContext.CLAMP_TO_EDGE);
 	glContext.bindTexture(glContext.TEXTURE_2D, null);
 	return texture;
 };
 
+/**
+ * sets a glBuffer to a vertex attribute
+ * attr -- string, the attribute variable name from the shader
+ * buffer -- the glBuffer with the attribute values (sa pushFloats)
+ * nCompPer -- components per vertex
+ */
 function bufferToAttribute(glContext, glProgram, attr, buffer, nCompPer) {
 	// look up the index of our variable
 	var attrLocation = glContext.getAttribLocation(glProgram, attr);
@@ -118,3 +138,20 @@ function bufferToAttribute(glContext, glProgram, attr, buffer, nCompPer) {
 	glContext.vertexAttribPointer(attrLocation, nCompPer, glContext.FLOAT, false, 0, 0);
 	return attrLocation;
 }
+/**
+ * 
+ * @param src -- the source array 
+ * @param img -- the destination array
+ * @param w -- the length of a line (for images RGBA this is 4 * width) 
+ */
+function copyFlipY(src, dst, w) {
+	var ix = src.length;
+	if(dst.length == ix) {
+		// for each source element
+		for(var i = 0, dstStart = dst.length - w; i < ix; dstStart -= w)
+			// copy each line to the right location in dest
+			for(var idst = dstStart, x = 0; x < w; ++idst, ++x, ++i) 
+				dst[idst] = src[i];
+	}
+}
+
