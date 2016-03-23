@@ -97,6 +97,7 @@ function pushFloats(glContext, values) {
  * returns the glTexture
  * creates a glTexture of the specified size or
  * sets up a javascript image as a webGL texture 
+ * set the active texture before making this call, e.g. glContext.activeTexture(glContext.TEXTURE1);
  */
 function imageToTexture(glContext, image_or_width, height) {
 	var texture = glContext.createTexture();
@@ -108,14 +109,13 @@ function imageToTexture(glContext, image_or_width, height) {
 	if(undefined == height)
 		glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, glContext.RGBA, glContext.UNSIGNED_BYTE, image_or_width);
 	else
-	      glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, image_or_width, height, 0, glContext.RGBA, glContext.UNSIGNED_BYTE, null);
+		glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, image_or_width, height, 0, glContext.RGBA, glContext.UNSIGNED_BYTE, null);
 	// how to zoom the texture
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MAG_FILTER, glContext.LINEAR);
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MIN_FILTER, glContext.LINEAR);
 	// how to handle coordinates outside of the texture
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_S, glContext.CLAMP_TO_EDGE);
 	glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_T, glContext.CLAMP_TO_EDGE);
-	glContext.bindTexture(glContext.TEXTURE_2D, null);
 	return texture;
 };
 

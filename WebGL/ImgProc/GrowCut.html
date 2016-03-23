@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Grow-Cut Image Segmentation</title>
+	<script src="../gl-setup.js"></script>
+	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/FileQueue.js'></script>
+	<script src='../../javascript/dicomParser.min.js'></script>
+	<script src='../../javascript/util.js'></script>
+	<script src='../../javascript/graph2d.js'></script>
+</head>
+<body>
+	<div id="nav">
+		<a href="index.html">Up</a> <a href="Thin.html">Prev - Edge Extraction and Thinning</a>
+	</div>
+	<H1>Grow-Cut Segmentation Algorithm</H1>
+	The <a href='http://www.graphicon.ru/oldgr/en/publications/text/gc2005vk.pdf'>grow-cut segmentation algorithm</a> works iteratively by pixels overtaking their neighbor and replacing the neighboring pixel labels with their own.
+	A pixel overtakes its neighbor by being closest in some L2 norm space, typically color difference between the two pixels, multiplied by a strength
+	of the attacking pixel.
+	<p>
+	Select an input image (choose files), create two or more label types, and select starting seed points for each label.  An input image (texture) and input state (texture)
+	are generated.  The algorithm converges when no more pixels change state in an iteration.  More seed points further apart generally speeds convergence.
+	<h3>Outputs</h3>
+	<dl>
+	 	<dt>Original</dt>
+			<dd>The original input image</dd>
+		<dt>State</dt>
+			<dd>The state map is the labels, quantized in the red channel, the strength in the green channel, and a changed flag in the blue channel</dd>
+		<dt>Change</dt>
+			<dd>Pixels that changed state in the final iteration are flagged white.  Set the maximum iterations very low and increment to watch the algorithm progress</dd>
+		<dt>Strength</dt>
+			<dd>Grayscale strength map, regardless of label</dd>
+		<dt>Label</dt>
+			<dd>Grayscale label map, regardless of strength, unlabeled pixels are black</dd>
+		<dt>Stencil</dt>
+			<dd>The original image for any pixel label greater than the first, otherwise black</dd>
+	</dl>
+	<H2>DICOM/Image Files</H2>
+	<script>
+		// create the file queue element
+		var fq = fileQueue.Deploy();
+	</script>
+	<table>
+	<tr><th>Input and Seeds</th><th>Output</th>
+	<tr>
+		<td>
+			<canvas id='inputImage' width='200' height='200' style='border: 1px solid black;'></canvas>
+		</td>
+		<td>
+			<canvas id='outputImage' style='border: 1px solid black;'></canvas>
+		</td>
+	</tr><tr>
+		<td>
+			<ul>
+				<li>click to add a seed for the currently selected state</li>
+				<li>click and drag to move a seed point</li>
+				<li>click and drag a seed point out of the box to delete it</li>
+			</ul>
+		</td><td>
+			<select id='outputType'>
+				<option>Original</option>
+				<option>State</option>
+				<option>Change</option>
+				<option>Strength</option>
+				<option>Label</option>
+				<option selected>Stencil</option>
+			</select>
+			Max Iter: <input type='number' min='16' max='4096' step='8' value='1024' id='maxIter'> Iterations: <span id='iter'>0</span>
+		</td>
+	</table>
+	<H3>DICOM controls</H3>
+	Only 16-bit grayscale currently supported
+	<br>
+	<input type='range' min="0.0" max="1.0" value="1.0" step='0.002' id="window"  style='width: 501px;'> Window <span id='windowValue'>1</span>
+	<br>
+	<input type='range' min="0.0" max="1.0" value="0.0" step='0.002' id="level" style='width: 501px;'> Floor <span id='levelValue'>0</span>
+	<br>
+	<canvas id='showWL' style="border: 1px solid green;" width='501' height='20'></canvas>
+	<br>
+	<input type='checkbox' id='swapByte'> Swap Bytes (big/little endian issues, if the image doesn't look right, click this)
+	<br>
+	<h3>Histogram</h3>
+	<canvas id="hist" width='501' height='100' style="border: 1px solid green;"></canvas>
+	<br>
+	<h3>States &mdash; Labels and Strengths</h3>
+	<table>
+	<tr>
+	<td><select size='6' id='stateList'></select></td>
+	<td>
+	<ul>
+		<li>clear to remove all seed points for the currently selected label</li>
+		<li>delete to remove a label</li>
+		<li>to add a label, type its name into the box and click add
+		<li>to change a label strength or marker color, select and click update
+		<li>label names cannot be changed, delete and re-create
+	</ul>
+	</td>
+	</tr>
+	</table>
+	<input type='text' placeholder='Label' id='stateLabel'><input type='number' min='0' max='1' step='0.1' placeholder='strength [0-1]' id='stateStr'><input type='color' id='stateColor'><button type='button' id='stateAdd'>Add</button><button type='button' id='stateClear'>Clear</button><button type='button' id='stateDelete'>Delete</button>
+	<br>
+	<script id="vertexShader" type="x-shader/x-vertex">
+		// our default vertex shader
+		precision highp float;
+		attribute vec3 coordinate;
+		attribute vec2 textureCoordinate;
+		varying vec2 varyingTextureCoordinate;
+
+		void main(void) {
+			gl_Position = vec4(coordinate,1.);
+			varyingTextureCoordinate = textureCoordinate;
+		}
+	</script>
+	<script id="fragmentShaderGrowCut" type="x-shader/x-fragment">
+		precision highp float;
+		// the input image -- this won't change, we use it for its color values
+		uniform sampler2D sourceTextureSampler;
+		// the label and strength -- this gets updated each pass
+		// r -- the label, g -- strength 
+		uniform sampler2D stateTextureSampler;
+		// image size
+		uniform vec2 sourceTextureSize;
+		// size of a pixel
+		uniform vec2 sourceTexelSize;
+		// the output mode
+		uniform int mode;
+		// the coordinate
+		varying vec2 varyingTextureCoordinate;
+
+		// neighbors are indexed as
+		// 5 1 4
+		// 2 . 0
+		// 6 3 7
+		// oh who are the people in your neighborhood, in your neighborhood, in your neighborhood, the people that you meet each day
+		void populateNeighbors(in sampler2D samp, in vec2 pt, in vec2 step, out vec3 neighbors[8]) {
+			vec2 ptR = vec2(step.x, 0); // one pixel right
+			vec2 ptU = vec2(0, step.y); // one pixel up
+			// pixels in the neighborhood
+       		neighbors[4] = texture2D(samp, pt.xy + step.xy).rgb;
+       		neighbors[6] = texture2D(samp, pt.xy - step.xy).rgb;
+       		neighbors[5] = texture2D(samp, pt.xy + ptU - ptR).rgb;
+       		neighbors[7] = texture2D(samp, pt.xy - ptU + ptR).rgb;
+       		neighbors[3] = texture2D(samp, pt.xy - ptU).rgb;
+       		neighbors[1] = texture2D(samp, pt.xy + ptU).rgb;
+       		neighbors[2] = texture2D(samp, pt.xy - ptR).rgb;
+       		neighbors[0] = texture2D(samp, pt.xy + ptR).rgb;
+		}
+
+		void main(void) {
+			// look up my pixel value
+  			vec4 c = texture2D(sourceTextureSampler, varyingTextureCoordinate);
+			// look up my state -- label and strength
+			vec3 s = texture2D(stateTextureSampler, varyingTextureCoordinate).rgb;
+			if(mode == 0) {
+				// iterating 
+				// the output -- my current strength and label
+				vec4 o = vec4(s.r, s.g, 0.0, 1.0);
+				float attackStr;
+				vec3 colors[8], states[8];
+				// get my neighbors colors
+				populateNeighbors(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize, colors);
+				// get my neighbors states (labels and strengths)
+				populateNeighbors(stateTextureSampler, varyingTextureCoordinate, sourceTexelSize, states);
+				// ready ... fight!
+				for(int i = 0; i < 8; ++i) {
+					// calculate the attack strength of each neighbor
+					// attack strength is 1 minus the normalized difference in color between the
+					// attacking neighbor and this pixel times the strength of the neighbor pixel
+					// i.e. the closer the colors, the stronger the attack
+					// maximum L2 norm -- color difference is (1,1,1) -> sqrt(3)
+					// what's with the 0.002 ???? -- our qunatization is 1/256 = 0.00390625
+					// to avoid rounding/quantization errors we'll look at half of that value
+					// otherwise our algorithm may never converge 
+					// (if you don't believe me, set it to 0 and watch the change map keep changing, be glad I did the debugging for you) 
+					if(((attackStr = (1.0 - distance(c.rgb, colors[i]) * 0.57735) * states[i].g) - o.g) > 0.002) {
+						// change my label and strength
+						o.r = states[i].r;
+						o.g = attackStr;
+						o.b = 1.0; // flag that we made a change
+					}
+				}
+				gl_FragColor = o;
+			} else if(mode == -1) {
+				// just the label (red)
+				gl_FragColor = vec4(s.r, s.r, s.r, 1.0);
+			} else if(mode == -2) {
+				// just the strength (green)
+				gl_FragColor = vec4(s.g, s.g, s.g, 1.0);
+			} else if(mode == -3) {
+				// just changed in the last iteration
+				gl_FragColor = vec4(s.b, s.b, s.b, 1.0);
+			} else if(mode == -4) {
+				// the full state map
+				gl_FragColor = vec4(s, 1.0);
+			} else if(mode == -5) {
+				// original input image
+				gl_FragColor = c;
+			} else {
+				// pass through the original  pixels if the label is above the mode value
+				float fMode = float(mode);
+				if(s.r * 255.0 > fMode) gl_FragColor = c;
+				else gl_FragColor = vec4(0, 0, 0, 1.0);
+			}
+		}
+	</script>	
+	<script>
+		'use strict';
+		function state(label, str, color) {
+			this.label = label;
+			// strength should really be per seed point, no reason all seeds have to have the same strength -- future work
+			this.str = (undefined == str || str.length < 1) ? 1.0 : str;
+			this.setStr = function(x) { if(undefined != str && str.length > 0) this.str = x; return this.str; }
+			this.color = (undefined == color) ? '#ff0000' : color;
+//			this.text = function() { return this.label + ' : ' +  this.str + ' : ' + this.color + ' : ' + this.seeds.length + ' seed(s)'; }
+			this.text = function() { return this.label + ' : ' +  this.str + ' : ' + this.seeds.length + ' seed(s)'; }
+			this.style = function() { return 'color: ' + this.color + ';'; }
+			this.seeds = [];
+			// remove a seed at index i
+			this.remove = function(i) {
+				if(i < this.seeds.length) {
+					for(var ix = this.seeds.length - 1; i < ix; ++i)
+						this.seeds[i] = this.seeds[i + 1];
+					this.seeds.pop();
+				}
+			}
+			return this;
+		}
+		state.prototype.str = 1.0;
+		state.prototype.color = '#ff0000';
+		
+		var ctx = document.getElementById('inputImage').getContext('2d');
+		// initial starting states
+		var states = [ new state('background', 1, '#00FF00'), new state('foreground', 1, '#FF0000') ];
+		// radius of a seed point on the image (pixels)
+		var rTol = 3;
+		// output type selector
+		var outputType= document.getElementById('outputType');
+		outputType.addEventListener('change', render, false);
+		// max iter control
+		var maxIter = document.getElementById('maxIter');
+		maxIter.addEventListener('change', render, false);
+		
+		// forground seed(s)
+		states[1].seeds = [ [ 0.5, 0.5 ] ];
+		// background seeds
+		states[0].seeds = [ [ 0.1, 0.1 ], [0.1, 0.9], [0.9, 0.1], [0.9, 0.9] ];
+		
+		/////////////
+		// the raw dicom pixel data
+		var pixelData;
+		// the parsed dicom file
+		var dicomData;
+		// histogram window/context
+		var ctxHist = document.getElementById('hist').getContext('2d');
+		// the image histogram
+		var hist = new Uint16Array(256);
+		
+		////////////////////////////////////////////////////////////////////////////////
+		// window and level
+		var win = document.getElementById('window');
+		var lvl = document.getElementById('level');
+		var swp = document.getElementById('swapByte');
+		var winV = document.getElementById('windowValue');
+		var lvlV = document.getElementById('levelValue');
+		var ctxWL = document.getElementById('showWL').getContext('2d');
+		win.onchange = onRender;
+		lvl.onchange = onRender;
+		swp.onchange = onRender;
+		function drawWindowLevel(ctx, w, l) {
+			ctx.fillStyle='#00D000';			
+			ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			//ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			w *= ctx.canvas.width * (1 - l);
+			l *= ctx.canvas.width;
+			var grd=ctx.createLinearGradient(l,0,l + w,ctx.canvas.height);
+			grd.addColorStop(0,"black");
+			grd.addColorStop(1,"white");
+			ctx.fillStyle=grd;			
+			ctx.fillRect(l, 0, w, ctx.canvas.height);
+		}
+		// make sure it's drawn
+		drawWindowLevel(ctxWL, win.value, lvl.value);
+		////////////////////////////////////////////////////////////////////////////////
+		
+		/////////////////
+		// state objects and labels
+		var slist = document.getElementById('stateList');
+		var sadd = document.getElementById('stateAdd');
+		var sclear = document.getElementById('stateClear');
+		var sdel = document.getElementById('stateDelete');
+		var slabel = document.getElementById('stateLabel');
+		// state events
+		sadd.disabled = sclear.disabled = sdel.disabled = true;
+		sadd.addEventListener('click', onAddState, false);
+		sclear.addEventListener('click', onClearState, false);
+		sdel.addEventListener('click', onDelState, false);
+		slabel.addEventListener('input', onChangeLabel, false); // on input will update after every key stroke
+		slist.addEventListener('change', onChangeState, false);
+			
+		onUpdateStates(states, slist);
+		updateCanvas(states, document.getElementById('inputImage').getContext('2d'));
+	
+		// find a state in the list matching label
+		function findState(states, label) {
+			for(var i = 0; i < states.length; ++i)
+				if(states[i].label == label) return i;
+			return -1;
+		}
+		
+		// populate the boxes based on selection
+		function populateState(x) {
+			slabel.value = x.label;
+			document.getElementById('stateStr').value = x.str;
+			document.getElementById('stateColor').value = x.color;
+			sdel.disabled = false;
+			sclear.disabled = x.seeds.length == 0;
+			sadd.innerHTML = 'Update';
+			sadd.disabled = false;
+		}
+		
+		// typing in the label box
+		function onChangeLabel(evt) {
+			var x = findState(states, slabel.value);
+			if(x < 0) {
+				sdel.disabled = true;
+				sclear.disabled = true;
+				sadd.innerHTML = 'Add';
+				sadd.disabled = slabel.value.length == 0;
+			} else
+				populateState(states[x]);
+			slist.selectedIndex = x;
+		}
+		
+		// a selection from the select element
+		function onChangeState(evt) {
+			populateState(states[evt.target.selectedIndex]);
+		}
+		
+		function onClearState(evt) {
+			var i = slist.selectedIndex;
+			if(i >= 0 && i < states.length) {
+				states[i].seeds = [];
+				populateState(states[i]);
+				onUpdateStates(states, slist);
+				render();
+			}
+		}
+		// delete a state
+		function onDelState(evt) {
+			var i = slist.selectedIndex;
+			if(i >= 0) {
+				for(var j = i; j < states.length - 1; ++j)
+					states[j] = states[j + 1];
+				states.pop();
+				onUpdateStates(states, slist);
+				slist.selectedIndex = i < states.length ? i : states.length - 1;
+				onChangeLabel();
+				render();
+			} 
+		}
+		
+		// add a new or update an existing state
+		function onAddState(evt) {
+			var label = document.getElementById('stateLabel').value;
+			var str = document.getElementById('stateStr').value;
+			for(var i = 0; i < states.length; ++i)
+				if(states[i].label == label) {
+					states[i].setStr(str);
+					states[i].color= document.getElementById('stateColor').value;
+					onUpdateStates(states, slist);
+					render(); // redraw, the color might have changed
+					return;
+				}
+			states.push(new state(label, document.getElementById('stateStr').value, document.getElementById('stateColor').value));
+			onUpdateStates(states, slist);
+			slist.selectedIndex = slist.length - 1;
+			populateState(states[slist.length - 1]);
+		}
+		
+		// populate the select ctrl with states
+		function onUpdateStates(states, ctrl) {
+			var i = 0;
+			var ix = Math.min(states.length, ctrl.length);
+			// replace any existing options
+			for(i = 0; i < ix; ++i) {
+				ctrl.options[i].text = states[i].text();
+				ctrl.options[i].style = states[i].style();
+			}
+			// add new ones
+			for(; i < states.length; ++i) {
+				var option = document.createElement("option");
+				option.text = states[i].text();
+				option.style =  states[i].style();
+				ctrl.add(option);			
+			}
+			// remove any extras
+			while(i < ctrl.length)
+				ctrl.remove(i);
+			if(ctrl.length) {
+				if(ctrl.selectedIndex < 0) ctrl.selectedIndex = 0;
+				else if(ctrl.selectedIndex >= ctrl.length) ctrl.selectedIndex = ctrl.length - 1;
+			}
+		}
+		
+		function updateCanvas(states, ctx) {
+			var TwoPI = 2 * Math.PI;
+			if(undefined != states && undefined != ctx && ctx.canvas.width > 0 && ctx.canvas.height > 0) {
+				ctx.save();
+				ctx.setTransform(1,0,0,-1,0,ctx.canvas.height);
+				for(var i = 0; i < states.length; ++i) {
+					ctx.fillStyle = states[i].color;
+					for(var j = 0; j < states[i].seeds.length; ++j) {
+						ctx.beginPath();
+						ctx.arc(states[i].seeds[j][0] * ctx.canvas.width, states[i].seeds[j][1] * ctx.canvas.height, rTol, 0, TwoPI);
+						ctx.fill();
+					}
+				}
+				ctx.restore();
+			}
+		}
+		/////////////////////
+		// canvas events
+
+		// drawing seeds
+		ctx.canvas.addEventListener('mousemove', onMouseMove, false);
+		ctx.canvas.addEventListener('mouseenter', onMouseEnter, false);
+		ctx.canvas.addEventListener('mouseleave', onMouseLeave, false);
+		ctx.canvas.addEventListener('click', onClick, false);
+		ctx.canvas.addEventListener('dblclick', onDblClick, false);
+		ctx.canvas.addEventListener('mousedown', onMouseDown, false);
+		ctx.canvas.addEventListener('mouseup', onMouseUp, false);
+		
+		// [ [ state index, seeds index], [x, y] ]
+		var mouseOver = [];
+		// we're dragging a seed point
+		var mouseDrag = false;
+		function onMouseDown(evt) {
+			if(mouseOver.length > 0) {
+				// dragging
+				mouseDrag = true;
+//				console.log('drag');
+			}
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		}
+		function onMouseUp(evt) {
+//			console.log('up');
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    if(mouseDrag == false || mouseOver.length == 0) {
+		    	// adding a point
+		    	if(slist.selectedIndex >= 0 && slist.selectedIndex < states.length) {
+		    		states[slist.selectedIndex].seeds.push([evt.offsetX / ctx.canvas.width, 1 - evt.offsetY / ctx.canvas.height]);
+		    		populateState(states[slist.selectedIndex]); // calling this to change the enable/disable of buttons
+		    		onUpdateStates(states, slist);
+		    		render();
+		    	}
+		    } else {
+		    	// moving a seed
+	    		states[mouseOver[0][0]].seeds[mouseOver[0][1]] = [evt.offsetX / ctx.canvas.width, 1 - evt.offsetY / ctx.canvas.height];
+		    	mouseDrag = false;
+		    	render();
+		    }
+		}
+		function onMouseMove(evt) {
+			if(mouseDrag == false) {
+				var tol = 0.015 * 0.015, dx , dy;
+				var x = evt.offsetX / ctx.canvas.width;
+				var y = 1.0 - evt.offsetY / ctx.canvas.height;
+				//console.log('move ' + [evt.offsetX, evt.offsetY]);
+				for(var i = 0; i < states.length; ++i) {
+					for(var j = 0; j < states[i].seeds.length; ++j) {
+						dx = states[i].seeds[j][0] - x;
+						dy = states[i].seeds[j][1] - y;
+						if(dx * dx + dy * dy < tol) {
+							ctx.canvas.style.cursor='move';
+							// which seed and its original value
+							// if we try to drag it out, we reset it
+							mouseOver = [[i, j], states[i].seeds[j]];
+//							console.log('over ' + mouseOver);
+							return;
+						}
+					}
+				}
+				mouseOver = [];
+				ctx.canvas.style.cursor='crosshair';
+			}
+		}
+		function onMouseEnter(evt) {
+//			console.log('enter ' + [evt.offsetX, evt.offsetY]);
+			ctx.canvas.style.cursor='crosshair';
+		    mouseOver = [];
+			mouseDrag = false;
+		}
+		function onMouseLeave(evt) {
+			if(mouseOver.length > 0 && mouseDrag == true) {
+//				console.log('delete');
+				// you dragged something out
+				states[mouseOver[0][0]].remove(mouseOver[0][1]);
+	    		populateState(states[slist.selectedIndex]); // calling this to change the enable/disable of buttons
+	    		onUpdateStates(states, slist);
+	    		render();
+			}				
+			ctx.canvas.style.cursor='auto';
+		}
+		function onClick(evt) {
+//			console.log('click ' + [evt.offsetX, evt.offsetY]);
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		}
+		function onDblClick(evt) {
+//			console.log('double click ' + [evt.offsetX, evt.offsetY]);
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    mouseOver = [];
+			mouseDrag = false;
+		}
+
+		//////////////////////////////////////////////////////////////////////////////////////
+		// the context
+		var glContext = initCanvasById('outputImage');
+		// the shader texts
+		var textFragShader = document.getElementById('fragmentShaderGrowCut').innerText;
+		var textVertShader = document.getElementById('vertexShader').innerText;
+		// the program and shaders
+		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+		// texture 0 is the image source
+		glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
+		// texture 1 is the state texture
+		glContext.uniform1i(glContext.getUniformLocation(glProgram, "stateTextureSampler"), 1);
+	
+		// our vertices are simply four corners of a square
+		// create a buffer, and populate it, to store the data
+		var vertexBuffer = pushFloats(glContext,
+				[ 
+		           -1., -1.,  0., 
+		            1., -1.,  0., 
+		           -1.,  1.,  0., 
+		            1.,  1.,  0. 
+		]);
+		// create a buffer of texture coordinates, another square, in 2D
+		var textureCoordBuffer = pushFloats(glContext, [ 0, 0, 	1, 0, 	0, 1, 	1, 1 ]);
+		// set the vertex and texture coordinate attributes
+		bufferToAttribute(glContext, glProgram, "coordinate", vertexBuffer, 3);
+		bufferToAttribute(glContext, glProgram, "textureCoordinate", textureCoordBuffer, 2);
+		
+		var imageSource = new Image();
+		var textureSource;
+		
+		function onImageChange() {
+			console.log('updating source texture');
+			ctx.canvas.width = imageSource.width; 
+			ctx.canvas.height = imageSource.height;
+			// texture 0, our input image
+			glContext.activeTexture(glContext.TEXTURE0);
+			// update the GL source texture
+			// after the image loads, convert it to a texture
+			textureSource = imageToTexture(glContext, imageSource);
+			// size the output canvas
+			glContext.viewport(0, 0, glContext.canvas.width = imageSource.width, glContext.canvas.height = imageSource.height);
+			onSourceChange(glContext, glProgram, textureSource, imageSource);
+			render();
+		}
+			
+		imageSource.onload = onImageChange;
+
+		// called after a file is selected from the queue and loaded
+		fq.onload = function() {
+			try {
+				if(this.data instanceof ArrayBuffer) {
+					dicomData = dicomParser.parseDicom(new Uint8Array(this.data));
+					console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
+					console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
+					renderDicom(dicomData, swp.checked, win.value, lvl.value);
+				} else {
+					// update the source image
+					if(imageSource instanceof ImageData) {
+						imageSource = new Image();
+						imageSource.onload = onImageChange;
+					}
+					dicomData = null;
+					imageSource.src = this.data; 
+				}
+			} catch(ex) {
+				console.log('load error ' + ex);
+			}
+		}
+		
+
+		// creates a texture of the appropriate size, and binds it to the frame buffer supplied
+		function setupFrameBuffer(glContext, w, h, fb) {
+			// create a texture for the framebuffer
+			var textureLocal = imageToTexture(glContext, w, h);
+			// set the framebuffer as the target
+			glContext.bindFramebuffer(glContext.FRAMEBUFFER, fb);
+			// attach texture to frame buffer
+			// gl.COLOR_ATTACHMENT0: Attaches the texture to the framebuffer's color buffer
+			// texture is a 2D image
+		    glContext.framebufferTexture2D(glContext.FRAMEBUFFER, glContext.COLOR_ATTACHMENT0, glContext.TEXTURE_2D, textureLocal, 0);
+			return textureLocal;
+		}
+		
+		// grow-cut intermediate state textures and framebuffers 
+		var imageState; // ImageData of initial strengths and labels
+		var texturesState = [null, null]; // two working textures, one is input, one is output
+		var fbState = [glContext.createFramebuffer(), glContext.createFramebuffer() ];
+		var pixels;
+		
+		// after the source image has been loaded, source image/texture
+		function onSourceChange(glContext, glProgram, texture, sourceTextureImage) {
+			if(undefined != glContext && undefined != glProgram && undefined != texture && undefined != sourceTextureImage) {
+				// adjust for the texture size
+				// set up the sourceTextureSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTextureSize"), sourceTextureImage.width, sourceTextureImage.height);
+				// set up the sourceTexelSize
+				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
+				// an array to grab the intermediate pixels -- we need to scan this to check for changes/convergence				
+				pixels = new Uint8Array(sourceTextureImage.width * sourceTextureImage.height * 4);
+				// our initial state
+				imageState = new ImageData(sourceTextureImage.width, sourceTextureImage.height);
+				// texture 1, our state image
+				glContext.activeTexture(glContext.TEXTURE1);
+				// set up the target frame buffer
+				// we'll defer texturesState[0] under we're ready to render
+				texturesState[1] = setupFrameBuffer(glContext, sourceTextureImage.width, sourceTextureImage.height, fbState[1]);
+			}
+		}
+		
+		// sets the pixel data acording to the input seeds
+		function statesToImage(states, img) {
+			// zero out the image
+			for(var i = 0; i < img.data.length; ++i) img.data[i] = 0;
+			// calculate the label packing
+			var label = Math.floor(256 / states.length / 2);
+			var step = label * 2;
+			for(var i = 0; i < states.length; ++i, label += step) {
+				for(var j = 0; j < states[i].seeds.length; ++j) {
+					// calculate the pixel location
+					var x = Math.floor(img.width * states[i].seeds[j][0] + 0.5);
+					var y = Math.floor(img.height * (1 - states[i].seeds[j][1]) + 0.5);
+					var off = ((y * img.width) + x) * 4;
+					img.data[off] = label;
+					img.data[off + 1] = states[i].str * 255; // strength
+				}
+			}
+		}
+		
+		function render() {
+			if(undefined == imageSource || imageSource.width == 0 || imageSource.height == 0) {
+				ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+				updateCanvas(states, ctx);
+			} else {
+				if(imageSource instanceof ImageData)
+					ctx.putImageData(imageSource, 0, 0);
+				else
+					ctx.drawImage(imageSource, 0, 0);
+				updateCanvas(states, ctx);
+				ctx.canvas.style.cursor='wait';
+				// the outputs
+				var tStart = Date.now();
+				var bDone = false, nMax = maxIter.value, nIter = 0, nCnt = 0, nPass = 0;
+				////////// our initial states -- store them in an image
+				statesToImage(states, imageState);
+				// now create a texture and bind the image to it 
+				glContext.activeTexture(glContext.TEXTURE1);
+				texturesState[0] = imageToTexture(glContext, imageState);
+				// attach texture to be the output of a frame buffer
+				// gl.COLOR_ATTACHMENT0: Attaches the texture to the framebuffer's color buffer
+				glContext.bindFramebuffer(glContext.FRAMEBUFFER, fbState[0]);
+			    glContext.framebufferTexture2D(glContext.FRAMEBUFFER, glContext.COLOR_ATTACHMENT0, glContext.TEXTURE_2D, texturesState[0], 0);
+			    var ot = outputType.selectedIndex - 5;
+			    if(ot == 0) ot = Math.floor(256 / states.length / 2) * 2 - 1;
+				for(; nIter <= nMax; ++nIter) {
+					glContext.uniform1i(glContext.getUniformLocation(glProgram, "mode"), bDone == true || nIter == nMax ? ot : 0);
+					// our state image as input
+					glContext.bindTexture(glContext.TEXTURE_2D, texturesState[nIter % 2]);
+					// use the canvas frame buffer for last render
+					glContext.bindFramebuffer(glContext.FRAMEBUFFER, bDone == true || nIter == nMax ? null : fbState[1 - (nIter % 2)]);
+					glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+					glContext.drawArrays(glContext.TRIANGLE_STRIP, 0, 4);
+					if(bDone) break;
+					// check if we converged, or if the last ieration is coming up
+					// only doing it every 8th to try to speed things up
+					if(nIter % 8 == 7 || nIter == nMax - 1) {
+						// scan the pixels for change
+						glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+						// look at the blue pixels (offset 2), these are the change flag
+						bDone = true;
+						for(var i = 2, ix = glContext.canvas.width * glContext.canvas.height * 4; i < ix; i += 4)
+							// did at least one pixel change
+							if(pixels[i] > 0) { bDone = false; break; }
+					}
+				}
+				document.getElementById('iter').innerHTML = nIter + ', ' + (Date.now() - tStart) + 'ms';
+				ctx.canvas.style.cursor='auto';
+			}
+		}
+		function renderDicom(dataSet, bSwap, w, l) {
+			if(undefined == bSwap) bSwap = false;
+			if(undefined == w) w = 1.0;
+			if(undefined == l) l = 0;
+			drawWindowLevel(ctxWL, w, l);
+			w *= (1 - l) * 65535;
+			l *= 65535;
+			if(w <= 0.) w = 1;
+			//w /= 256;
+			try {
+				// access a string element
+				var studyInstanceUid = dataSet.string('x0020000d');
+				// get the pixel data element (contains the offset and length of the data)
+				var pixelDataElement = dataSet.elements.x7fe00010;
+			    var nRows = dataSet.uint16('x00280010');
+			    var nCols = dataSet.uint16('x00280011');
+			    var nSamplesPerPixel = dataSet.uint16('x00280002');
+			    var nBitsPerPixel = dataSet.uint16('x00280100');
+			    
+//			    document.getElementById('dcmStudy').innerHTML = studyInstanceUid;
+//			    document.getElementById('dcmRows').innerHTML = nRows;
+//			    document.getElementById('dcmCols').innerHTML = nCols;
+//			    document.getElementById('dcmBPP').innerHTML = nBitsPerPixel;
+//			    document.getElementById('dcmSPP').innerHTML = nSamplesPerPixel;
+			    
+			    pixelData = new Uint8Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length);
+		    
+			    ctx.canvas.width = nCols;
+			    ctx.canvas.height = nRows;
+			    imageSource = ctx.createImageData(nRows, nCols);
+			    var b;
+			    hist.fill(0);
+//				console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
+//				console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
+				var bLittleEndian = (dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser);
+				if(bSwap) bLittleEndian = !bLittleEndian;
+			    for(var iSrc = 0, iDst = 0; iSrc < pixelData.length; iSrc += 2, iDst += 4) {
+			    	if(bLittleEndian) b = (pixelData[iSrc + 1] << 8) + pixelData[iSrc];
+			    	else b = (pixelData[iSrc] << 8) + pixelData[iSrc + 1];
+			    	if(b <= l) {
+			    		b = 0;
+			    		imageSource.data[iDst+2] = imageSource.data[iDst+1] = imageSource.data[iDst] = 0;
+			    	} else {
+			    		b -= l;
+			    		if(b >= w) {
+			    			imageSource.data[iDst] = imageSource.data[iDst+1] = imageSource.data[iDst+2] = 255;
+			    		} else {
+				    		b = (b >= w) ? 255 : Math.floor(255 * (b / w) + 0.5);
+				    		imageSource.data[iDst] = imageSource.data[iDst+1] = imageSource.data[iDst+2] = b;
+			    		}
+			    	}
+			    	imageSource.data[iDst+3] = 255;
+			    	++hist[imageSource.data[iDst]];
+			    }
+			    hist[0] = 0;
+			    hist[255] = 0;
+				drawBarGraph(ctxHist, hist);
+				onImageChange();
+			} catch(ex) {
+			   	console.log('Error rendering dicom');
+				console.log(ex);
+			}
+			
+		}
+		function onRender() {
+			winV.innerHTML = win.value;
+			lvlV.innerHTML = lvl.value;
+			if(undefined != dicomData && null != dicomData)
+				renderDicom(dicomData, swp.checked, win.value, lvl.value);
+		}
+	</script>
+</body>
+</html>

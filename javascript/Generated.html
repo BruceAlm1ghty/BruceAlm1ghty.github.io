@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Dynamically Generated Web Page</title>
+	<script src='./FileQueue.js'></script>
+</head>
+<body>
+	<div id="nav">
+		<a href="index.html">Up</a> <a href="Draw.html">Prev - Draw</a>
+	</div>
+	<H2>DICOM/Image File Viewer</H2>
+	<script>
+		// create the file queue element
+		var fq = fileQueue.Deploy();
+	</script>
+	<canvas id='inputImage' width='200' height='200'></canvas>
+	<br>
+	<ul><li>click to add a seed for the currently selected label</li><li>click and drag to move a seed point</li><li>double click to remove an existing seed</li></ul>
+	<input type='text' placeholder='Label' id='stateLabel'><input type='number' min='0' max='1' step='0.1' placeholder='strength [0-1]' id='stateStr'><input type='color' id='stateColor'><button type='button' id='stateAdd'>Add</button><button type='button' id='stateClear'>Clear</button><button type='button' id='stateDelete'>Delete</button>
+	<br>
+	<select size='6' id='stateList'></select>
+	<script>
+		function state(label, str, color) {
+			this.label = label;
+			this.str = (undefined == str || str.length < 1) ? 1.0 : str;
+			this.setStr = function(x) { if(undefined != str && str.length > 0) this.str = x; return this.str; }
+			this.color = (undefined == color) ? '#ff0000' : color;
+			this.text = function() { return this.label + ' : ' +  this.str + ' : ' + this.color + ' : ' + this.seeds.length + ' seed(s)'; }
+			this.style = function() { return 'color: ' + this.color + ';'; }
+			this.seeds = [];
+			return this;
+		}
+		state.prototype.str = 1.0;
+		state.prototype.color = '#ff0000';
+		
+		var ctx = document.getElementById('inputImage').getContext('2d');
+		var image = new Image;
+		var states = [ new state('dummy', 1) ]
+		var rTol = 3;
+		
+		// set the update call back to transfer it to the image
+		fq.update = function() { image.src = this.data; ctx.canvas.width = image.width; ctx.canvas.height = image.height; render(); return true; }
+		function render() {
+			console.log('render');
+			if(undefined == image || image.width == 0 || image.height == 0)
+				ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			else
+				ctx.drawImage(image, 0, 0);
+			updateCanvas(states, ctx);
+		}
+		
+		states[0].seeds = [ [ 0.5, 0.5 ], [ 0.25, 0.25], [0.35, 0.75], [0.65, 0.25], [0.7, 0.8] ];
+		
+		/////////////////
+		// state objects and labels
+		var slist = document.getElementById('stateList');
+		var sadd = document.getElementById('stateAdd');
+		var sclear = document.getElementById('stateClear');
+		var sdel = document.getElementById('stateDelete');
+		var slabel = document.getElementById('stateLabel');
+		// state events
+		sadd.disabled = sclear.disabled = sdel.disabled = true;
+		sadd.addEventListener('click', onAddState, false);
+		sclear.addEventListener('click', onClearState, false);
+		sdel.addEventListener('click', onDelState, false);
+		slabel.addEventListener('input', onChangeLabel, false); // on input will update after every key stroke
+		slist.addEventListener('change', onChangeState, false);
+			
+		onUpdateStates(states, slist);
+		updateCanvas(states, document.getElementById('inputImage').getContext('2d'));
+	
+		// find a state in the list matching label
+		function findState(states, label) {
+			for(var i = 0; i < states.length; ++i)
+				if(states[i].label == label) return i;
+			return -1;
+		}
+		
+		// populate the boxes based on selection
+		function populateState(x) {
+			slabel.value = x.label;
+			document.getElementById('stateStr').value = x.str;
+			document.getElementById('stateColor').value = x.color;
+			sdel.disabled = false;
+			sclear.disabled = x.seeds.length == 0;
+			sadd.innerHTML = 'Update';
+			sadd.disabled = false;
+		}
+		
+		// typing in the label box
+		function onChangeLabel(evt) {
+			var x = findState(states, slabel.value);
+			if(x < 0) {
+				sdel.disabled = true;
+				sclear.disabled = true;
+				sadd.innerHTML = 'Add';
+				sadd.disabled = slabel.value.length == 0;
+			} else
+				populateState(states[x]);
+			slist.selectedIndex = x;
+		}
+		
+		// a selection from the select element
+		function onChangeState(evt) {
+			populateState(states[evt.target.selectedIndex]);
+		}
+		
+		function onClearState(evt) {
+			var i = slist.selectedIndex;
+			if(i >= 0 && i < states.length) {
+				console.log('clearing ' + states[i]);
+				states[i].seeds = [];
+				populateState(states[i]);
+				onUpdateStates(states, slist);
+				render();
+			}
+		}
+		// delete a state
+		function onDelState(evt) {
+			var i = slist.selectedIndex;
+			if(i >= 0) {
+				console.log('deleting ' + states[i]);
+				for(var j = i; j < states.length - 1; ++j)
+					states[j] = states[j + 1];
+				states.pop();
+				onUpdateStates(states, slist);
+				slist.selectedIndex = i < states.length ? i : states.length - 1;
+				onChangeLabel();
+				render();
+			} 
+		}
+		
+		// add a new or update an existing state
+		function onAddState(evt) {
+			var label = document.getElementById('stateLabel').value;
+			var str = document.getElementById('stateStr').value;
+			for(var i = 0; i < states.length; ++i)
+				if(states[i].label == label) {
+					console.log('updating');
+					states[i].setStr(str);
+					states[i].color= document.getElementById('stateColor').value;
+					onUpdateStates(states, slist);
+					render(); // redraw, the color might have changed
+					return;
+				}
+			console.log('adding');
+			states.push(new state(label, document.getElementById('stateStr').value, document.getElementById('stateColor').value));
+			onUpdateStates(states, slist);
+			slist.selectedIndex = slist.length - 1;
+			populateState(states[slist.length - 1]);
+		}
+		
+		// populate the select ctrl with states
+		function onUpdateStates(states, ctrl) {
+			var i = 0;
+			var ix = Math.min(states.length, ctrl.length);
+			// replace any existing options
+			for(i = 0; i < ix; ++i) {
+				ctrl.options[i].text = states[i].text();
+				ctrl.options[i].style = states[i].style();
+			}
+			// add new ones
+			for(; i < states.length; ++i) {
+				var option = document.createElement("option");
+				option.text = states[i].text();
+				option.style =  states[i].style();
+				ctrl.add(option);			
+			}
+			// remove any extras
+			while(i < ctrl.length)
+				ctrl.remove(i);
+			if(ctrl.length) {
+				if(ctrl.selectedIndex < 0) ctrl.selectedIndex = 0;
+				else if(ctrl.selectedIndex >= ctrl.length) ctrl.selectedIndex = ctrl.length - 1;
+			}
+		}
+		
+		function updateCanvas(states, ctx) {
+			var TwoPI = 2 * Math.PI;
+			if(undefined != states && undefined != ctx && ctx.canvas.width > 0 && ctx.canvas.height > 0) {
+				ctx.save();
+				ctx.setTransform(1,0,0,-1,0,ctx.canvas.height);
+				for(var i = 0; i < states.length; ++i) {
+					ctx.fillStyle = states[i].color;
+					for(var j = 0; j < states[i].seeds.length; ++j) {
+						ctx.beginPath();
+						ctx.arc(states[i].seeds[j][0] * ctx.canvas.width, states[i].seeds[j][1] * ctx.canvas.height, rTol, 0, TwoPI);
+						ctx.fill();
+					}
+				}
+				ctx.restore();
+			}
+		}
+		/////////////////////
+		// canvas events
+		
+		ctx.canvas.addEventListener('mousemove', onMouseMove, false);
+		ctx.canvas.addEventListener('mouseenter', onMouseEnter, false);
+		ctx.canvas.addEventListener('mouseleave', onMouseLeave, false);
+		ctx.canvas.addEventListener('click', onClick, false);
+		ctx.canvas.addEventListener('dblclick', onDblClick, false);
+		ctx.canvas.addEventListener('mousedown', onMouseDown, false);
+		ctx.canvas.addEventListener('mouseup', onMouseUp, false);
+		
+		var mouseOver = [];
+		var mouseDrag = false;
+		function onMouseDown(evt) {
+			if(mouseOver.length > 0) {
+				// dragging
+				mouseDrag = true;
+				console.log('drag');
+			}
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		}
+		function onMouseUp(evt) {
+			console.log('up');
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    if(mouseDrag == false) {
+		    	// adding a point
+		    	if(slist.selectedIndex >= 0 && slist.selectedIndex < states.length) {
+		    		states[slist.selectedIndex].seeds.push([evt.offsetX / ctx.canvas.width, 1 - evt.offsetY / ctx.canvas.height]);
+		    		populateState(states[slist.selectedIndex]);
+		    		onUpdateStates(states, slist);
+		    		render();
+		    	}
+		    }
+		}
+		function onMouseMove(evt) {
+			var tol = 0.015 * 0.015, dx , dy;
+			var x = evt.offsetX / ctx.canvas.width;
+			var y = 1.0 - evt.offsetY / ctx.canvas.height;
+			//console.log('move ' + [evt.offsetX, evt.offsetY]);
+			for(var i = 0; i < states.length; ++i) {
+				for(var j = 0; j < states[i].seeds.length; ++j) {
+					dx = states[i].seeds[j][0] - x;
+					dy = states[i].seeds[j][1] - y;
+					if(dx * dx + dy * dy < tol) {
+						ctx.canvas.style.cursor='move';
+						// which seed and its original value
+						// if we try to drag it out, we reset it
+						mouseOver = [[i, j], states[i].seeds[j]];
+						console.log('over ' + mouseOver);
+						return;
+					}
+				}
+			}
+			mouseOver = [];
+			ctx.canvas.style.cursor='crosshair';
+		}
+		function onMouseEnter(evt) {
+			console.log('enter ' + [evt.offsetX, evt.offsetY]);
+			ctx.canvas.style.cursor='crosshair';
+		}
+		function onMouseLeave(evt) {
+			console.log('leave ' + [evt.offsetX, evt.offsetY]);
+//			if(mouseOver.length > 0) {
+//				// dragging something out
+//			}
+//			mouseOver = [];
+//			mouseDrag = false;
+		}
+		function onClick(evt) {
+			console.log('click ' + [evt.offsetX, evt.offsetY]);
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		}
+		function onDblClick(evt) {
+			console.log('double click ' + [evt.offsetX, evt.offsetY]);
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		}
+	</script>
+</body>
+</html>

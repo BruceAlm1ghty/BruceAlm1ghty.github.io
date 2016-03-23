@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>DICOM Image Load Test</title>
+	<script src="./dicomParser.min.js"></script>
+	<script src="./graph2d.js"></script>
+	<script src="./util.js"></script>
+</head>
+<body>
+	<div id="nav">
+		<a href="index.html">Up</a> <a href="Draw.html">Prev - Draw</a>
+	</div>
+
+	<h3>DICOM/Image File Viewer</h3>
+	<input type="file" accept="*/*" id="fileLoad" multiple />
+	<br>
+	<table><tr><td rowspan='5'>
+	<select id="fileSel" size='7'></select>
+	</td><th style='text-align: left;'>Edit List</th>
+	</tr><tr>
+	<td><button type="button" id="fileClear" disabled>Remove All</button></td>
+	</tr><tr>
+	<td><button type="button" id="fileUp" disabled>&#x25B2;</button> Move Up</td>
+	</tr><tr>
+	<td><button type="button" id="fileDel" disabled>Remove Sel</button></td>
+	</tr><tr>
+	<td><button type="button" id="fileDown" disabled>&#x25BC;</button> Move Down</td>
+	</tr>
+	</table>
+	<p>Scroll Images 
+	<button type="button" id="fileDec" disabled>&#x25C4;</button>
+	<input type='range' min='0' max='0' id="fileSlider" disabled>
+	<button type="button" id="fileInc" disabled>&#x25BA;</button><span id='fileName'></span>
+	<br>
+	<table><tr><td rowspan='5'>
+	<canvas id="image" style="border: 1px solid red;"></canvas>
+	</td><th style='text-align: left;'>Study</th><td><span id='dcmStudy'></span></td>
+	</tr><tr>
+	<th style='text-align: left;'>Rows</th><td><span id='dcmRows'></span></td>
+	</tr><tr>
+	<th style='text-align: left;'>Columns</th><td><span id='dcmCols'></span></td>
+	</tr><tr>
+	<th style='text-align: left;'>BitsPerPixel</th><td><span id='dcmBPP'></span></td>
+	</tr><tr>
+	<th style='text-align: left;'>SamplesPerPixel</th><td><span id='dcmSPP'></span></td>
+	</tr>	
+	</table>
+	<br>
+	<input type='range' min="0.0" max="1.0" value="1.0" step='0.002' id="window"  style='width: 501px;'> Window <span id='windowValue'>1</span>
+	<br>
+	<input type='range' min="0.0" max="1.0" value="0.0" step='0.002' id="level" style='width: 501px;'> Level <span id='levelValue'>0</span>
+	<br>
+	<canvas id='showWL' style="border: 1px solid green;" width='501' height='20'></canvas>
+	<br>
+	<input type='checkbox' id='swapByte'> Swap Bytes
+	<br>
+	<h3>Histogram</h3>
+	<canvas id="hist" width='501' height='100' style="border: 1px solid green;"></canvas>
+	<script>
+		// DICOM
+		// the image context
+		var ctx = document.getElementById('image').getContext('2d');
+		// the raw dicom pixel data
+		var pixelData;
+		// the context image data (processed pixelData)
+		var image;
+		// the parsed dicom file
+		var dicomData;
+		// histogram window/context
+		var ctxHist = document.getElementById('hist').getContext('2d');
+		// the image histogram
+		var hist = new Uint16Array(256);
+		
+		////////////////////////////////////////////////////////////////////////////////
+		// window and level
+		var win = document.getElementById('window');
+		var lvl = document.getElementById('level');
+		var swp = document.getElementById('swapByte');
+		var winV = document.getElementById('windowValue');
+		var lvlV = document.getElementById('levelValue');
+		var ctxWL = document.getElementById('showWL').getContext('2d');
+		win.onchange = onRender;
+		lvl.onchange = onRender;
+		swp.onchange = onRender;
+		function drawWindowLevel(ctx, w, l) {
+			ctx.fillStyle='#00D000';			
+			ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			//ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+			w *= ctx.canvas.width * (1 - l);
+			l *= ctx.canvas.width;
+			var grd=ctx.createLinearGradient(l,0,l + w,ctx.canvas.height);
+			grd.addColorStop(0,"black");
+			grd.addColorStop(1,"white");
+			ctx.fillStyle=grd;			
+			ctx.fillRect(l, 0, w, ctx.canvas.height);
+		}
+		// make sure it's drawn
+		drawWindowLevel(ctxWL, win.value, lvl.value);
+		////////////////////////////////////////////////////////////////////////////////
+
+		////////////////////////////////////////////////////////////////////////////////
+		// file list manipulation buttons
+		var fileEnum = Object.freeze({ LOAD:0, SEL:1, UP:2, DEL:3, DOWN:4, PREV:5, SLIDE:6, NAME:7, NEXT:8, CLEAR: 9});
+		var fileNames = [ 'fileLoad', 'fileSel', 'fileUp', 'fileDel', 'fileDown', 'fileDec', 'fileSlider', 'fileName', 'fileInc', 'fileClear' ];
+		var fileList = [];
+		var fileBtns = [ ]; 
+		for(var i = 0, ix = fileNames.length; i < ix; ++i) {
+			fileBtns.push(document.getElementById(fileNames[i]));
+			fileBtns[i].disabled = (i != fileEnum.LOAD);
+		}
+		// the event handlers
+		fileBtns[fileEnum.SLIDE].addEventListener('change', onSliderSel, false); // use the slider to select a file
+		fileBtns[fileEnum.SEL].addEventListener('change', onListSel, false); // select a file from the list
+		fileBtns[fileEnum.UP].addEventListener('click', onFileUp, false); // move the selected file up one in the list
+		fileBtns[fileEnum.DOWN].addEventListener('click', onFileDown, false); // move the selected file down one in the list
+		fileBtns[fileEnum.DEL].addEventListener('click', onFileDel, false); // remove the selected from the list
+		fileBtns[fileEnum.PREV].addEventListener('click', decSel, false); // remove the selected from the list
+		fileBtns[fileEnum.NEXT].addEventListener('click', incSel, false); // remove the selected from the list
+		fileBtns[fileEnum.LOAD].addEventListener('change', handleFileSelect, false);
+		fileBtns[fileEnum.CLEAR].addEventListener('click', onFileClear, false);
+
+		// from the selected file list, display file at index i
+		function onChooseFile(i) {
+			if(fileList != undefined && i < fileList.length) {
+				readFiles(fileList[i]);
+				fileBtns[fileEnum.SLIDE].value = i;
+				fileBtns[fileEnum.SEL].selectedIndex = i;
+				enableFileBtns();
+			}
+		}
+		function onSliderSel(evt) {
+			onChooseFile(evt.target.value);
+		}
+		function onListSel(evt) {
+			onChooseFile(evt.target.selectedIndex);
+		}
+		
+		function incSel(evt) {
+			if(fileList != undefined)
+				// slideFiles.value gets treated as text ?!?
+				onChooseFile((fileBtns[fileEnum.SEL].selectedIndex + 1) % fileList.length); 
+				
+		}
+		function decSel(evt) {
+			if(fileList != undefined)
+				onChooseFile((fileBtns[fileEnum.SEL].selectedIndex + fileList.length - 1) % fileList.length); 
+		}
+		function fileSwap(iNew, iOrig) {
+			var xTmp = fileList[iNew];
+			fileList[iNew] = fileList[iOrig];  
+			fileList[iOrig] = xTmp;
+			processFileList(fileList, false);
+			onChooseFile(iNew)
+		}
+		function onFileUp(evt) {
+			var i = fileBtns[fileEnum.SEL].selectedIndex;
+			if(i > 0) fileSwap(i - 1, i);
+		}
+		function onFileDown(evt) {
+			var i = fileBtns[fileEnum.SEL].selectedIndex;
+			if(i < fileList.length - 1) fileSwap(i + 1, i);
+		}
+		function onFileDel(evt) {
+			var iOrig = fileBtns[fileEnum.SEL].selectedIndex;
+			for(var i = iOrig, ix = fileList.length - 1; i < ix; ++i)
+				fileList[i] = fileList[i + 1];
+			fileList.pop();
+			processFileList(fileList, false);
+			onChooseFile(iOrig)
+		}
+		function onFileClear() {
+			fileList = [];
+			processFileList(fileList, false);
+		}
+		function enableFileBtns() {
+			fileBtns[fileEnum.LOAD].disabled = false;
+			fileBtns[fileEnum.SEL].disabled = fileList.length == 0;
+			fileBtns[fileEnum.UP].disabled = fileList.length == 0 || fileBtns[fileEnum.SEL].selectedIndex < 1;
+			fileBtns[fileEnum.DEL].disabled = fileList.length == 0 || fileBtns[fileEnum.SEL].selectedIndex == -1;
+			fileBtns[fileEnum.DOWN].disabled = fileList.length == 0 || fileBtns[fileEnum.SEL].selectedIndex == fileList.length - 1;
+			fileBtns[fileEnum.PREV].disabled = fileBtns[fileEnum.SLIDE].disabled = fileBtns[fileEnum.NEXT].disabled = fileList.length == 0;
+			fileBtns[fileEnum.CLEAR].disabled = fileList.length == 0;
+		}
+		function processFileList(files, bCopyList) {
+			if(undefined == bCopyList || bCopyList == true) fileList = [];
+			while(fileBtns[fileEnum.SEL].length > 0)
+				fileBtns[fileEnum.SEL].remove(fileBtns[fileEnum.SEL].length - 1);
+			for(var i = 0; i < files.length; ++i) {
+				var option = document.createElement("option");
+				option.text = files[i].name;
+				fileBtns[fileEnum.SEL].add(option);
+				if(undefined == bCopyList || bCopyList == true) fileList.push(files[i]);
+			}
+			fileBtns[fileEnum.SLIDE].max = files.length > 0 ? files.length - 1 : files.length;
+			fileBtns[fileEnum.SLIDE].value = 0;
+			fileBtns[fileEnum.SEL].selectedIndex = 0;
+			enableFileBtns();
+		}
+		///////////////////////////////////////////
+	
+		function onRender() {
+			winV.innerHTML = win.value;
+			lvlV.innerHTML = lvl.value;
+			if(undefined != dicomData)
+				renderDicom(dicomData, swp.checked, win.value, lvl.value);
+		}
+	
+		function readImage(file) {
+			var reader = new FileReader();
+			reader.onloadend = function() {
+				var im = new Image();
+				im.src = this.result;
+			    ctx.canvas.width = im.width;
+			    ctx.canvas.height = im.height;
+				ctx.drawImage(im, 0, 0);
+			}
+			reader.readAsDataURL(file);
+		}
+
+		function renderDicom(dataSet, bSwap, w, l) {
+			if(undefined == bSwap) bSwap = false;
+			if(undefined == w) w = 1.0;
+			if(undefined == l) l = 0;
+			drawWindowLevel(ctxWL, w, l);
+			w *= (1 - l) * 65535;
+			l *= 65535;
+			if(w <= 0.) w = 1;
+			//w /= 256;
+			try {
+				// access a string element
+				var studyInstanceUid = dataSet.string('x0020000d');
+				// get the pixel data element (contains the offset and length of the data)
+				var pixelDataElement = dataSet.elements.x7fe00010;
+			    var nRows = dataSet.uint16('x00280010');
+			    var nCols = dataSet.uint16('x00280011');
+			    var nSamplesPerPixel = dataSet.uint16('x00280002');
+			    var nBitsPerPixel = dataSet.uint16('x00280100');
+			    
+			    document.getElementById('dcmStudy').innerHTML = studyInstanceUid;
+			    document.getElementById('dcmRows').innerHTML = nRows;
+			    document.getElementById('dcmCols').innerHTML = nCols;
+			    document.getElementById('dcmBPP').innerHTML = nBitsPerPixel;
+			    document.getElementById('dcmSPP').innerHTML = nSamplesPerPixel;
+			    
+			    pixelData = new Uint8Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length);
+		    
+			    ctx.canvas.width = nCols;
+			    ctx.canvas.height = nRows;
+			    image = ctx.createImageData(nRows, nCols);
+			    var b;
+			    hist.fill(0);
+			    for(var iSrc = 0, iDst = 0; iSrc < pixelData.length; iSrc += 2, iDst += 4) {
+			    	if(bSwap) b = (pixelData[iSrc] << 8) + pixelData[iSrc + 1];
+			    	else b = (pixelData[iSrc + 1] << 8) + pixelData[iSrc];
+			    	if(b <= l) {
+			    		b = 0;
+			    		image.data[iDst+2] = image.data[iDst+1] = image.data[iDst] = 0;
+			    	} else {
+			    		b -= l;
+			    		if(b >= w) {
+					    	image.data[iDst] = 255; image.data[iDst+1] = image.data[iDst+2] = 255;
+			    		} else {
+				    		b = (b >= w) ? 255 : Math.floor(255 * (b / w) + 0.5);
+					    	image.data[iDst] = image.data[iDst+1] = image.data[iDst+2] = b;
+			    		}
+			    	}
+			    	image.data[iDst+3] = 255;
+			    	++hist[image.data[iDst]];
+			    }
+			    ctx.putImageData(image, 0, 0);
+			    hist[0] = 0;
+			    hist[255] = 0;
+				drawBarGraph(ctxHist, hist);
+			} catch(ex) {
+			   	console.log('Error rendering dicom');
+				console.log(ex);
+			}
+			
+		}
+		function readDicom(f) {
+			var reader = new FileReader();
+			reader.onloadend = function() {
+				try
+				{
+					// Parse the byte array to get a DataSet object that has the parsed contents
+					dicomData = dicomParser.parseDicom(new Uint8Array(this.result));
+					console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
+					console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
+					renderDicom(dicomData, swp.checked, win.value, lvl.value);
+				}
+				catch(ex)
+				{
+				   	console.log('Error parsing byte stream');
+					console.log(ex);
+				} 						
+			}
+			reader.readAsArrayBuffer(f);
+		}
+		
+		
+		function readFiles(files) {
+			var f;
+			if(files instanceof FileList) {
+				processFileList(files);
+				if(files.length > 0) readFiles(files[0]); //return;//f = files[0];
+			} else if(files instanceof File)
+				f = files;
+			if(undefined != f) {
+				fileName.innerHTML = f.name;
+				// Only process image files.
+				if (f.type.match('image.*')) {
+ 					/*
+ 					FileReader includes four options for reading a file, asynchronously:
+					FileReader.readAsBinaryString(Blob|File) - The result property will contain the file/blob's data as a binary string. Every byte is represented by an integer in the range [0..255].
+					FileReader.readAsText(Blob|File, opt_encoding) - The result property will contain the file/blob's data as a text string. By default the string is decoded as 'UTF-8'. Use the optional encoding parameter can specify a different format.
+					FileReader.readAsDataURL(Blob|File) - The result property will contain the file/blob's data encoded as a data URL.
+					FileReader.readAsArrayBuffer(Blob|File) - The result property will contain the file/blob's data as an ArrayBuffer object.
+					*/
+					readImage(f);
+		  		} else {
+		  			readDicom(f);
+		  		}
+			}
+		}
+		function handleFileDrop(evt) {
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    readFiles(evt.dataTransfer.files[0]); // FileList object.
+		}
+		function handleFileSelect(evt) {
+			evt.stopPropagation();
+			evt.preventDefault();
+   			readFiles(evt.target.files);
+		}
+		function handleDragOver(evt) {
+		    evt.stopPropagation();
+		    evt.preventDefault();
+		    evt.dataTransfer.dropEffect = 'copy'; // Explicitly show this is a copy.
+		}
+		// Setup the dnd listeners.
+		var dropZone = document.getElementById('image');
+		dropZone.addEventListener('dragover', handleDragOver, false);
+		dropZone.addEventListener('drop', handleFileDrop, false);
+	</script>
+</body>
+</html>
