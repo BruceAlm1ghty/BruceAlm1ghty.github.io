@@ -82,7 +82,7 @@ var fileQueue = (function() {
 			ret.ids[i] = ((idPrefix == undefined) ? 'file' : idPrefix) + ret.ids[i]; 
 		ret.create(ret.LOAD, 'INPUT');
 		ret.load.setAttribute('type', 'file');
-		ret.load.setAttribute('accept', '*/*');
+		ret.load.setAttribute('accept', 'image/*,*/*');
 		ret.load.setAttributeNode(document.createAttribute('multiple'));
 		ret.create(ret.APPEND, 'INPUT'); 
 		ret.append.setAttribute('type', 'checkbox');

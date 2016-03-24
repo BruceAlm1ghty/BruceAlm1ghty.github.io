@@ -78,8 +78,6 @@
 	<br>
 	<canvas id='showWL' style="border: 1px solid green;" width='501' height='20'></canvas>
 	<br>
-	<input type='checkbox' id='swapByte'> Swap Bytes (big/little endian issues, if the image doesn't look right, click this)
-	<br>
 	<h3>Histogram</h3>
 	<canvas id="hist" width='501' height='100' style="border: 1px solid green;"></canvas>
 	<br>
@@ -265,13 +263,13 @@
 		// window and level
 		var win = document.getElementById('window');
 		var lvl = document.getElementById('level');
-		var swp = document.getElementById('swapByte');
+//		var swp = document.getElementById('swapByte');
 		var winV = document.getElementById('windowValue');
 		var lvlV = document.getElementById('levelValue');
 		var ctxWL = document.getElementById('showWL').getContext('2d');
 		win.onchange = onRender;
 		lvl.onchange = onRender;
-		swp.onchange = onRender;
+//		swp.onchange = onRender;
 		function drawWindowLevel(ctx, w, l) {
 			ctx.fillStyle='#00D000';			
 			ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -583,7 +581,7 @@
 					dicomData = dicomParser.parseDicom(new Uint8Array(this.data));
 					console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
 					console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
-					renderDicom(dicomData, swp.checked, win.value, lvl.value);
+					renderDicom(dicomData, false /*swp.checked*/, win.value, lvl.value);
 				} else {
 					// update the source image
 					if(imageSource instanceof ImageData) {
@@ -770,41 +768,80 @@
 			if(undefined == w) w = 1.0;
 			if(undefined == l) l = 0;
 			drawWindowLevel(ctxWL, w, l);
-			w *= (1 - l) * 65535;
-			l *= 65535;
-			if(w <= 0.) w = 1;
+			//w *= (1 - l) * 65535;
+			//l *= 65535;
+			//if(w <= 0.) w = 1;
 			//w /= 256;
 			try {
-				// access a string element
-				var studyInstanceUid = dataSet.string('x0020000d');
+//				(0028,0002) US 3                                        #   2, 1 SamplesPerPixel
+//				(0028,0004) CS [RGB]                                    #   4, 1 PhotometricInterpretation
+//			    (0028,0006) US 0                                        #   2, 1 PlanarConfiguration
+//			    (0028,0008) IS [200]                                    #   4, 1 NumberOfFrames
+//			    (0028,0010) US 960                                      #   2, 1 Rows
+//			    (0028,0011) US 1280                                     #   2, 1 Columns
+//			    (0028,0100) US 8                                        #   2, 1 BitsAllocated
+//			    (0028,0101) US 8                                        #   2, 1 BitsStored
+//			    (0028,0102) US 7                                        #   2, 1 HighBit
+//			    (0028,0103) US 0                                        #   2, 1 PixelRepresentation
+//			    (0028,1050) DS [128]                                    #   4, 1 WindowCenter
+//			    (0028,1051) DS [256]                                    #   4, 1 WindowWidth
+//			    (0028,1052) DS [0]                                      #   2, 1 RescaleIntercept
+//			    (0028,1053) DS [1]                                      #   2, 1 RescaleSlope	    
+//			    console.log(photoInterp);
+				var imageInfo = {
+					studyInstanceUid : dataSet.string('x0020000d'), 
+					samplePerPixel : dataSet.uint16('x00280002'),
+					photoInterp : dataSet.string('x00280004'),
+					planarConfig : dataSet.uint16('x00280006'),
+					frames : dataSet.int32('x00280008'),
+					rows : dataSet.uint16('x00280010'),
+					cols : dataSet.uint16('x00280011'),
+					bitsAllocated : dataSet.uint16('x00280100'),
+					bitsStored : dataSet.uint16('x00280101'),
+					highBit : dataSet.uint16('x00280102'),
+					pixelSigned : dataSet.uint16('x00280103'),
+					windowCenter : parseFloat(dataSet.string('x00281050')),
+					windowWidth : parseFloat(dataSet.string('x00281051')),
+					rescaleIntercept : parseFloat(dataSet.string('x00281052')),
+					rescaleSlope : parseFloat(dataSet.string('x00281053'))
+				};
+				console.log(imageInfo);
+
 				// get the pixel data element (contains the offset and length of the data)
 				var pixelDataElement = dataSet.elements.x7fe00010;
-			    var nRows = dataSet.uint16('x00280010');
-			    var nCols = dataSet.uint16('x00280011');
-			    var nSamplesPerPixel = dataSet.uint16('x00280002');
-			    var nBitsPerPixel = dataSet.uint16('x00280100');
-			    
+	    
 //			    document.getElementById('dcmStudy').innerHTML = studyInstanceUid;
 //			    document.getElementById('dcmRows').innerHTML = nRows;
 //			    document.getElementById('dcmCols').innerHTML = nCols;
 //			    document.getElementById('dcmBPP').innerHTML = nBitsPerPixel;
 //			    document.getElementById('dcmSPP').innerHTML = nSamplesPerPixel;
 			    
-			    pixelData = new Uint8Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length);
-		    
+				if(imageInfo.pixelSigned)
+					pixelData = new Int16Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length / 2);
+				else
+					pixelData = new Uint16Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length / 2);
+
+				var nRows = imageInfo.rows;
+				var nCols = imageInfo.cols;
 			    ctx.canvas.width = nCols;
 			    ctx.canvas.height = nRows;
 			    imageSource = ctx.createImageData(nRows, nCols);
-			    var b;
+			    imageInfo.windowWidth *= 4; // expanding the window a bit
+			    var pixelMin = imageInfo.windowCenter - imageInfo.windowWidth / 2;
+			    
+			    // calculate the floor and window in pixel values
+			    l = Math.floor(imageInfo.windowWidth * l + 0.5);
+			    w = Math.floor(w * (imageInfo.windowWidth - l) + 0.5);
+			    l += pixelMin;
+			    if(w < 1) w = 1;
+				console.log('min: ' + pixelMin + ', max: ' + (pixelMin + imageInfo.windowWidth) + ', floor: ' + l + ', window: ' + w);
 			    //hist.fill(0);
 			    for(var i = 0; i < hist.length; ++i) hist[i] = 0;
-//				console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
-//				console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
-				var bLittleEndian = (dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser);
-				if(bSwap) bLittleEndian = !bLittleEndian;
-			    for(var iSrc = 0, iDst = 0; iSrc < pixelData.length; iSrc += 2, iDst += 4) {
-			    	if(bLittleEndian) b = (pixelData[iSrc + 1] << 8) + pixelData[iSrc];
-			    	else b = (pixelData[iSrc] << 8) + pixelData[iSrc + 1];
+				// if the endian-ness doesn't match, we need to swap (or toggle the swap request)
+				if((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser) != isLittleEndian) bSwap = !bSwap;
+			    for(var iSrc = 0, iDst = 0; iSrc < pixelData.length; ++iSrc, iDst += 4) {
+			    	b = pixelData[iSrc];
+			    	if(bSwap) b = ((b & 0xff00) >> 8) | ((b & 0x00ff) << 8);
 			    	if(b <= l) {
 			    		b = 0;
 			    		imageSource.data[iDst+2] = imageSource.data[iDst+1] = imageSource.data[iDst] = 0;
@@ -834,7 +871,7 @@
 			winV.innerHTML = win.value;
 			lvlV.innerHTML = lvl.value;
 			if(undefined != dicomData && null != dicomData)
-				renderDicom(dicomData, swp.checked, win.value, lvl.value);
+				renderDicom(dicomData, false /*swp.checked*/, win.value, lvl.value);
 		}
 	</script>
 </body>
