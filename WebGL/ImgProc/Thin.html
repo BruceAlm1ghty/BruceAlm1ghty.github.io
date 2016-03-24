@@ -5,6 +5,7 @@
 	<title>Over the Edge</title>
 	<script src="../gl-setup.js"></script>
 	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/util.js'></script>
 	<script src='../../javascript/graph2d.js'></script>
 </head>
 <body>
@@ -215,8 +216,8 @@
 		// the context
 		var glContext = initCanvasById('renderCanvas');
 		// the shader texts
-		var textFragShader = document.getElementById('fragmentShader').innerText;
-		var textVertShader = document.getElementById('vertexShader').innerText;
+		var textFragShader = document.getElementById('fragmentShader').innerHTML;
+		var textVertShader = document.getElementById('vertexShader').innerHTML;
 		// the program and shaders
 		var glProgram = initProgram(glContext, textVertShader, textFragShader);
 		var fThreshLoc = glContext.getUniformLocation(glProgram, "fThreshold");
@@ -372,7 +373,8 @@
 		function updateHistX(pixels) {
 			if(undefined != pixels) {
 				var mx = 0, t = 0;
-				hist.fill(0);
+				//hist.fill(0);
+				for(var j = 0; j < hist.length; ++j) hist[j] = 0;
 				var i = 0; // document.getElementById('channel').selectedIndex;
 				for(var ix = pixels.length; i < ix; i += 4) {
 					t = pixels[i];
@@ -381,7 +383,7 @@
 				}
 				document.getElementById('nzero').innerHTML = hist[0];
 				hist[0] = 0;
-				document.getElementById('nmax').innerHTML = Math.max(...hist);
+				document.getElementById('nmax').innerHTML = findMax(hist); //Math.max(...hist);
 				drawBarGraph(ctxGraph, hist);
 				//ctxGraph.fillStyle='#00FF00';
 				//drawLineGraph(ctxGraph, hist, 7);
@@ -482,8 +484,9 @@
 		XText.innerHTML = 'None';
 		ctxGraph.canvas.onmouseout = onMouseOutGraph;
 		
-		// if we're over the histgram, use the mouse point X position as a threshold value
+		// if we're over the histogram, use the mouse point X position as a threshold value
 		ctxGraph.canvas.addEventListener('mousemove', function(evt) {
+			fixEvent(evt);
 			fThresh = evt.offsetX / evt.target.width;
 			XText.innerHTML = fThresh;
 			render();

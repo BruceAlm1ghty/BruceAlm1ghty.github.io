@@ -5,6 +5,7 @@
 	<title>Over the Edge</title>
 	<script src="../gl-setup.js"></script>
 	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/util.js'></script>
 	<script src='../../javascript/graph2d.js'></script>
 </head>
 <body>
@@ -193,7 +194,8 @@
 			if(undefined != pixels) {
 				glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
 				var mx = 0, t = 0;
-				hist.fill(0);
+				//hist.fill(0);
+				for(var j = 0; j < hist.length; ++j) hist[j] = 0;
 				var i = document.getElementById('channel').selectedIndex;
 				for(var ix = pixels.length; i < ix; i += 4) {
 					t = pixels[i];
@@ -202,7 +204,7 @@
 				}
 				document.getElementById('nzero').innerHTML = hist[0];
 				hist[0] = 0;
-				document.getElementById('nmax').innerHTML = Math.max(...hist);
+				document.getElementById('nmax').innerHTML = findMax(hist); //Math.max(...hist);
 				drawBarGraph(ctxGraph, hist);
 				//ctxGraph.fillStyle='#00FF00';
 				//drawLineGraph(ctxGraph, hist, 7);
@@ -220,6 +222,7 @@
 			updateHist();
 		}
 		function onMouseMove(evt) {
+			fixEvent(evt);
 			focusPoint = [ evt.offsetX / sourceTextureImage.width,
 							1. - (evt.offsetY / sourceTextureImage.height) ];
 			document.getElementById('ktext').innerHTML = focusPoint[0];

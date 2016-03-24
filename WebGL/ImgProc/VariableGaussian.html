@@ -4,6 +4,7 @@
 	<meta charset="ISO-8859-1">
 	<title>It's all a blur</title>
 	<script src="../gl-setup.js"></script>
+	<script src='../../javascript/util.js'></script>
 	<script src='../../javascript/jquery-1.11.0.min.js'></script>
 </head>
 <body>
@@ -103,8 +104,8 @@ A gaussian blur operator with controllable kernel size and standard deviation
 		// the context
 		var glContext = initCanvasById('renderCanvas');
 		console.log(glContext);
-		var textFragShader = document.getElementById('fragmentShader').innerText;
-		var textVertShader = document.getElementById('vertexShader').innerText;
+		var textFragShader = document.getElementById('fragmentShader').innerHTML;
+		var textVertShader = document.getElementById('vertexShader').innerHTML;
 		var nFrag = textFragShader.search('// SLICE END');
 //		// the program and shaders
 //		var glProgram = initProgram(glContext, textVertShader, textFragShader);

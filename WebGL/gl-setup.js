@@ -12,8 +12,11 @@ function initCanvas(canvas) {
 //	var glContext = canvas.getContext("webgl", {preserveDrawingBuffer: true});
 	var glContext = canvas.getContext("webgl");
 	if (glContext == undefined) {
-		console.log('bad context')
-		return undefined;
+		glContext = canvas.getContext("experimental-webgl");
+		if (glContext == undefined) {
+			console.log('bad context')
+			return undefined;
+		}
 	}
 	// some basic set up
 	glContext.clearColor(0.0, 0.0, 0.0, 1.0); // black, fully opaque
@@ -44,10 +47,17 @@ function createShader(glContext, textShader, glType) {
 function createAndAttachShader(glContext, glProgram, textShader, glType) {
 	var shader = createShader(glContext, textShader, glType);
 	if (!glContext.getShaderParameter(shader, glContext.COMPILE_STATUS)) {
-		if(glType == glContext.VERTEX_SHADER)
+		if(glType == glContext.VERTEX_SHADER) {
 			alert('Could not compile vertex shader');
-		else
+			var x = document.getElementById('vertError');
+			if(undefined != x && null != x)
+				x.innerHTML = glContext.getShaderInfoLog(shader) + ' code: ' + textShader;
+		} else {
 			alert('Could not compile fragment Shader');
+			var x = document.getElementById('fragError');
+			if(undefined != x && null != x)
+				x.innerHTML = glContext.getShaderInfoLog(shader) + ' code: ' + textShader;
+		}
 		console.log(glContext.getShaderInfoLog(shader));
 	}
 	glContext.attachShader(glProgram, shader);

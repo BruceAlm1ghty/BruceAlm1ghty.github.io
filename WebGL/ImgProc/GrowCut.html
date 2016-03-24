@@ -34,7 +34,7 @@
 		<dt>Label</dt>
 			<dd>Grayscale label map, regardless of strength, unlabeled pixels are black</dd>
 		<dt>Stencil</dt>
-			<dd>The original image for any pixel label greater than the first, otherwise black</dd>
+			<dd>The original image for any pixel label greater than the first, otherwise transparent</dd>
 	</dl>
 	<H2>DICOM/Image Files</H2>
 	<script>
@@ -66,7 +66,7 @@
 				<option>Label</option>
 				<option selected>Stencil</option>
 			</select>
-			Max Iter: <input type='number' min='16' max='4096' step='8' value='1024' id='maxIter'> Iterations: <span id='iter'>0</span>
+			Max Iter: <input type='number' min='8' max='4096' step='8' value='1024' id='maxIter'> Iterations: <span id='iter'>0</span>
 		</td>
 	</table>
 	<H3>DICOM controls</H3>
@@ -99,8 +99,13 @@
 	</tr>
 	</table>
 	<input type='text' placeholder='Label' id='stateLabel'><input type='number' min='0' max='1' step='0.1' placeholder='strength [0-1]' id='stateStr'><input type='color' id='stateColor'><button type='button' id='stateAdd'>Add</button><button type='button' id='stateClear'>Clear</button><button type='button' id='stateDelete'>Delete</button>
+	<h3>Output State Map</h3>
+	<canvas id='workingImage'></canvas>
 	<br>
-	<script id="vertexShader" type="x-shader/x-vertex">
+	Vertex Error: <span id='vertError'>none</span>
+	<br>
+	Fragment Error: <span id='fragError'>none</span>
+	<script id="vertexShader" type="gl-shader/vertex">
 		// our default vertex shader
 		precision highp float;
 		attribute vec3 coordinate;
@@ -112,7 +117,7 @@
 			varyingTextureCoordinate = textureCoordinate;
 		}
 	</script>
-	<script id="fragmentShaderGrowCut" type="x-shader/x-fragment">
+	<script id="fragmentShaderGrowCut" type="gl-shader/fragment">
 		precision highp float;
 		// the input image -- this won't change, we use it for its color values
 		uniform sampler2D sourceTextureSampler;
@@ -200,12 +205,12 @@
 				// pass through the original  pixels if the label is above the mode value
 				float fMode = float(mode);
 				if(s.r * 255.0 > fMode) gl_FragColor = c;
-				else gl_FragColor = vec4(0, 0, 0, 1.0);
+				else gl_FragColor = vec4(0, 0, 0, 0.0);
 			}
 		}
 	</script>	
 	<script>
-		'use strict';
+//		'use strict';
 		function state(label, str, color) {
 			this.label = label;
 			// strength should really be per seed point, no reason all seeds have to have the same strength -- future work
@@ -236,7 +241,7 @@
 		var rTol = 3;
 		// output type selector
 		var outputType= document.getElementById('outputType');
-		outputType.addEventListener('change', render, false);
+		outputType.addEventListener('change', onChangeOutput, false);
 		// max iter control
 		var maxIter = document.getElementById('maxIter');
 		maxIter.addEventListener('change', render, false);
@@ -391,7 +396,8 @@
 			for(; i < states.length; ++i) {
 				var option = document.createElement("option");
 				option.text = states[i].text();
-				option.style =  states[i].style();
+				if(option.style.writable)
+					option.style =  states[i].style();
 				ctrl.add(option);			
 			}
 			// remove any extras
@@ -445,6 +451,7 @@
 		    evt.preventDefault();
 		}
 		function onMouseUp(evt) {
+			fixEvent(evt);
 //			console.log('up');
 		    evt.stopPropagation();
 		    evt.preventDefault();
@@ -464,6 +471,7 @@
 		    }
 		}
 		function onMouseMove(evt) {
+			fixEvent(evt);
 			if(mouseDrag == false) {
 				var tol = 0.015 * 0.015, dx , dy;
 				var x = evt.offsetX / ctx.canvas.width;
@@ -519,12 +527,15 @@
 
 		//////////////////////////////////////////////////////////////////////////////////////
 		// the context
-		var glContext = initCanvasById('outputImage');
+//		var glContext = initCanvasById('outputImage');
+		var glContext = initCanvasById('workingImage');
+		var ctxOut = document.getElementById('outputImage').getContext('2d');
 		// the shader texts
 		var textFragShader = document.getElementById('fragmentShaderGrowCut').innerText;
 		var textVertShader = document.getElementById('vertexShader').innerText;
 		// the program and shaders
-		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+//		var glProgram = initProgram(glContext, textVertShader, textFragShader);
+		var glProgram = initProgramById(glContext, 'vertexShader', 'fragmentShaderGrowCut');
 		// texture 0 is the image source
 		glContext.uniform1i(glContext.getUniformLocation(glProgram, "sourceTextureSampler"), 0);
 		// texture 1 is the state texture
@@ -581,6 +592,7 @@
 					}
 					dicomData = null;
 					imageSource.src = this.data; 
+					colorSource = null;
 				}
 			} catch(ex) {
 				console.log('load error ' + ex);
@@ -606,6 +618,7 @@
 		var texturesState = [null, null]; // two working textures, one is input, one is output
 		var fbState = [glContext.createFramebuffer(), glContext.createFramebuffer() ];
 		var pixels;
+		var outputImageData;
 		
 		// after the source image has been loaded, source image/texture
 		function onSourceChange(glContext, glProgram, texture, sourceTextureImage) {
@@ -617,8 +630,9 @@
 				glContext.uniform2f(glContext.getUniformLocation(glProgram, "sourceTexelSize"), 1.0 / sourceTextureImage.width, 1.0 / sourceTextureImage.height);
 				// an array to grab the intermediate pixels -- we need to scan this to check for changes/convergence				
 				pixels = new Uint8Array(sourceTextureImage.width * sourceTextureImage.height * 4);
+				outputImageData = ctxOut.createImageData(sourceTextureImage.width, sourceTextureImage.height);// new ImageData(sourceTextureImage.width, sourceTextureImage.height);
 				// our initial state
-				imageState = new ImageData(sourceTextureImage.width, sourceTextureImage.height);
+				imageState = ctx.createImageData(sourceTextureImage.width, sourceTextureImage.height);// new ImageData(sourceTextureImage.width, sourceTextureImage.height);
 				// texture 1, our state image
 				glContext.activeTexture(glContext.TEXTURE1);
 				// set up the target frame buffer
@@ -646,15 +660,68 @@
 			}
 		}
 		
+		var colorSource = null;
+		// copy pixels to the output
+		function onChangeOutput() {
+			if(null != colorSource)
+				updateOutputImage(ctxOut, outputImageData, pixels, colorSource);
+		}
+		// transfer data from 'pixels' to 'outputImage' based output selection type and place into canvas
+		function updateOutputImage(ctx, outputImageData, statePixels, inputImageData) {
+		    var ot = outputType.selectedIndex; //x - 5;
+		    var base = (Math.floor(256 / states.length / 2) * 2 - 1);
+		    ctx.canvas.width = outputImageData.width, ctx.canvas.height = outputImageData.height;
+		    if(ot == 0) ctx.putImageData(inputImageData, 0, 0);
+		    else {
+		    	// out pixel data and image data have opposite Y orientations :(
+		    	var w = ctx.canvas.width * 4;
+		    	var j = statePixels.length - w;
+		    	// for each line
+		    	for(var ln = 0, i = 0; ln < ctx.canvas.height; ++ln, j -= w) {
+				    switch(ot) {
+				    case 1:
+				    	// state -- just copy
+				    	for(var x = 0; x < w; ++x, ++i)
+				    		outputImageData.data[i] = statePixels[j + x];
+				    	break;
+				    case 2:
+				    case 3:
+				    case 4:
+				    	// change 2, strength 3, label 4
+				    	for(var x = 4; x <= w; x += 4, i += 4) {
+				    		outputImageData.data[i] = outputImageData.data[i+1] = outputImageData.data[i+2] = statePixels[j + x - ot];
+				    		outputImageData.data[i+3] = 255;
+				    	}
+				    	break;
+				    case 5: 
+				    	// stencil
+				    	for(var x = 0; x < w; x += 4, i += 4) {
+				    		if(statePixels[j + x] > base) {
+					    		outputImageData.data[i] = inputImageData.data[i];
+					    		outputImageData.data[i+1] = inputImageData.data[i+1];
+					    		outputImageData.data[i+2] = inputImageData.data[i+2];
+					    		outputImageData.data[i+3] = inputImageData.data[i+3];
+				    		} else {
+					    		outputImageData.data[i] = outputImageData.data[i+1] = outputImageData.data[i+2] = outputImageData.data[i+3] = 0;
+				    		}
+				    	}
+				    }
+		    	}
+			    ctx.putImageData(outputImageData, 0, 0);
+		    }
+		}
 		function render() {
 			if(undefined == imageSource || imageSource.width == 0 || imageSource.height == 0) {
 				ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 				updateCanvas(states, ctx);
 			} else {
-				if(imageSource instanceof ImageData)
+				if(imageSource instanceof ImageData) {
 					ctx.putImageData(imageSource, 0, 0);
-				else
+					colorSource = imageSource;
+				} else {
 					ctx.drawImage(imageSource, 0, 0);
+					colorSource = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+				}
 				updateCanvas(states, ctx);
 				ctx.canvas.style.cursor='wait';
 				// the outputs
@@ -672,7 +739,7 @@
 			    var ot = outputType.selectedIndex - 5;
 			    if(ot == 0) ot = Math.floor(256 / states.length / 2) * 2 - 1;
 				for(; nIter <= nMax; ++nIter) {
-					glContext.uniform1i(glContext.getUniformLocation(glProgram, "mode"), bDone == true || nIter == nMax ? ot : 0);
+					glContext.uniform1i(glContext.getUniformLocation(glProgram, "mode"), bDone == true || nIter == nMax ? -4 : 0);
 					// our state image as input
 					glContext.bindTexture(glContext.TEXTURE_2D, texturesState[nIter % 2]);
 					// use the canvas frame buffer for last render
@@ -692,6 +759,8 @@
 							if(pixels[i] > 0) { bDone = false; break; }
 					}
 				}
+				// copy pixels to the output
+				updateOutputImage(ctxOut, outputImageData, pixels, colorSource);
 				document.getElementById('iter').innerHTML = nIter + ', ' + (Date.now() - tStart) + 'ms';
 				ctx.canvas.style.cursor='auto';
 			}
@@ -727,7 +796,8 @@
 			    ctx.canvas.height = nRows;
 			    imageSource = ctx.createImageData(nRows, nCols);
 			    var b;
-			    hist.fill(0);
+			    //hist.fill(0);
+			    for(var i = 0; i < hist.length; ++i) hist[i] = 0;
 //				console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
 //				console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
 				var bLittleEndian = (dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser);

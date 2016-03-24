@@ -15,7 +15,7 @@ function drawLineGraph(g, values, w) {
 	g.setTransform(1,0,0,1,0,0);
 	g.clearRect(0, 0, g.canvas.width, g.canvas.height);
 	var dXPixel = values.length / g.canvas.width;
-	var dYPixel = Math.max(...values) / g.canvas.height;
+	var dYPixel = /*Math.max(...values)*/ findMax(values) / g.canvas.height;
 	g.setTransform(1.0 / dXPixel,0,0,-0.95 / dYPixel,0,g.canvas.height);
 	g.lineWidth = 2 * Math.min(dXPixel, dYPixel);
 	g.beginPath();
@@ -42,8 +42,9 @@ function drawBarGraph(g, values) {
 	g.save();
 	g.setTransform(1,0,0,1,0,0);
 	g.clearRect(0, 0, g.canvas.width, g.canvas.height);
-	var YMin = Math.min(...values);
-	var YMax = Math.max(...values);
+	var YMinMax = findMinMax(values);
+	var YMin = YMinMax[0];
+	var YMax = YMinMax[1];
 	if(YMax > 0.0 && YMin > 0.0) YMin = 0.0;
 	if(YMax < 0.0 && YMin < 0.0) YMax = 0.0;
 	var YRange = (YMax - YMin);
