@@ -4,27 +4,25 @@
  * return a webGL context given a canvas  
  */
 function initCanvas(canvas) {
-	if (canvas == undefined) {
-		console.log('bad canvas')
-		console.log(c); 
-		return undefined;
-	}
+	if (canvas) {
 //	var glContext = canvas.getContext("webgl", {preserveDrawingBuffer: true});
-	var glContext = canvas.getContext("webgl");
-	if (glContext == undefined) {
-		glContext = canvas.getContext("experimental-webgl");
-		if (glContext == undefined) {
-			console.log('bad context')
-			return undefined;
-		}
+		var glContext = canvas.getContext("webgl");
+		if (!glContext) {
+			if(!(glContext = canvas.getContext("experimental-webgl")))
+				console.log("can't create context");
+				return null;
+			}
+		// some basic set up
+		glContext.clearColor(0.0, 0.0, 0.0, 1.0); // black, fully opaque
+		glContext.enable(glContext.DEPTH_TEST);
+		glContext.depthFunc(glContext.LEQUAL); // Near things obscure far things
+		glContext.viewport(0, 0, canvas.width, canvas.height);
+		glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+		return glContext;
 	}
-	// some basic set up
-	glContext.clearColor(0.0, 0.0, 0.0, 1.0); // black, fully opaque
-	glContext.enable(glContext.DEPTH_TEST);
-	glContext.depthFunc(glContext.LEQUAL); // Near things obscure far things
-	glContext.viewport(0, 0, canvas.width, canvas.height);
-	glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
-	return glContext;
+	console.log('bad canvas')
+	console.log(c); 
+	return null;
 }
 
 /**
@@ -68,21 +66,20 @@ function createAndAttachShader(glContext, glProgram, textShader, glType) {
  * create a webGL program given a vertex and fragment shader script
  */
 function initProgram(glContext, textVertexShader, textFragmentShader) {
-	if (glContext == undefined) {
-		console.log('no context');
-		return undefined;
+	if (glContext) {
+	    //////////////////////////////////
+		// the program and shaders
+		var glProgram = glContext.createProgram();
+		createAndAttachShader(glContext, glProgram, textVertexShader, glContext.VERTEX_SHADER);
+		createAndAttachShader(glContext, glProgram, textFragmentShader, glContext.FRAGMENT_SHADER);
+	    ///////////////////////////////////////
+		glContext.linkProgram(glProgram);
+		glContext.useProgram(glProgram);
+	    ///////////////////////////////////////
+		return glProgram;
 	}
-	
-    //////////////////////////////////
-	// the program and shaders
-	var glProgram = glContext.createProgram();
-	createAndAttachShader(glContext, glProgram, textVertexShader, glContext.VERTEX_SHADER);
-	createAndAttachShader(glContext, glProgram, textFragmentShader, glContext.FRAGMENT_SHADER);
-    ///////////////////////////////////////
-	glContext.linkProgram(glProgram);
-	glContext.useProgram(glProgram);
-    ///////////////////////////////////////
-	return glProgram;
+	console.log('no context');
+	return null;
 }
 
 /**
@@ -116,7 +113,7 @@ function imageToTexture(glContext, image_or_width, height) {
 	// Sets pixel storage modes for readPixels and unpacking of textures with texImage2D and texSubImage2D .	
 	glContext.pixelStorei(glContext.UNPACK_FLIP_Y_WEBGL, true);
 	// put the image data into the texture
-	if(undefined == height)
+	if(undefined == height || null == height)
 		glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, glContext.RGBA, glContext.UNSIGNED_BYTE, image_or_width);
 	else
 		glContext.texImage2D(glContext.TEXTURE_2D, 0, glContext.RGBA, image_or_width, height, 0, glContext.RGBA, glContext.UNSIGNED_BYTE, null);
@@ -165,3 +162,125 @@ function copyFlipY(src, dst, w) {
 	}
 }
 
+function setAttributeBuffer(glContext, attrib, buffer, length) {
+   // bind our coordinate buffer to the attribute
+   glContext.bindBuffer(glContext.ARRAY_BUFFER, buffer);
+   glContext.vertexAttribPointer(attrib, length, glContext.FLOAT, false, 0, 0); 
+}
+
+function glShape(glContext, verts, locVert, mode) {
+	// mode is one of
+	// glContext.POINTS - Draws a single dot per vertex. For example, 10 vertices produce 10 dots. 
+	// glContext.LINES - Draws a line between a pair of vertices. For example, 10 vertices produce 5 separate lines.
+	// glContext.LINE_STRIP - Draws a line to the next vertex by a straight line. For example, 10 vertices produce 9 lines connected end to end. 
+	// glContext.LINE_LOOP - Similar to gl.LINE_STRIP, but connects the last vertex back to the first. For example, 10 vertices produce 10 straight lines.
+	// glContext.TRIANGLES - Draws a triangle for each group of three consecutive vertices. For example, 12 vertices create 4 separate triangles.
+	// glContext.TRIANGLE_STRIP - Creates a strip of triangles where each additional vertex creates an additional triangle once the first three vertices have been drawn. For example, 12 vertices create 10 triangles. 
+	// glContext.TRIANGLE_FAN = 
+	this.mode = mode ? mode : null;
+	
+	// ARRAY_BUFFERS with coordinates, colors, and normals for each vertex 
+	this.attributes = { 
+			coordinates : { buffer : null, location : null },
+			normals : { buffer : null, location : null },
+			colors : { buffer : null, location : null}, 
+			length : 0 
+		};
+
+	this.toAttribute = function(glContext, attr, array, loc) {
+		if(undefined != loc && null != loc) attr.location = loc;
+		// create a buffer and bind it, so we can manipulate it
+		glContext.bindBuffer(glContext.ARRAY_BUFFER, attr.buffer = glContext.createBuffer());
+		// set the data
+        glContext.bufferData(glContext.ARRAY_BUFFER, new Float32Array(array), glContext.STATIC_DRAW);
+        return array.length;
+	}
+	
+	/**
+	 * glContext -- the webGL context
+	 * verts -- the vertices
+	 * loc -- the location in the program of the coordinate array buffer
+	 */
+	this.setVerts = function(glContext, verts, loc) {
+		return this.attributes.length = this.toAttribute(glContext, this.attributes.coordinates, verts, loc) / 3;
+	}
+	
+	/**
+	 * glContext -- the webGL context
+	 * clrs -- the vertex colors
+	 * loc -- the location in the program of the color attribute 
+	 */
+	this.setColors = function(glContext, clrs, loc) {
+		return this.attributes.length = this.toAttribute(glContext, this.attributes.colors, clrs, loc) / 4;
+	}
+	
+	this.setAttributes = function(glContext, attr, sz) {
+		if(attr.buffer && null != attr.location && undefined != attr.location) {
+    	   // bind our buffer to the attribute
+    	   glContext.bindBuffer(glContext.ARRAY_BUFFER, attr.buffer);
+    	   // sz components per attribute e.g. (X,Y,Z) or (R,G,B,A)
+    	   glContext.vertexAttribPointer(attr.location, sz, glContext.FLOAT, false, 0, 0);
+    	   // enable the attribute
+    	   glContext.enableVertexAttribArray(attr.location);
+		}
+	}
+	/**
+	 * glContext -- the webGL context
+	 * progCoord -- the location in the program of the coordinate array buffer
+	 * progColor -- the location in the program of the color array buffer
+	 */
+	this.draw = function(glContext) {
+		this.setAttributes(glContext, this.attributes.coordinates, 3);
+		this.setAttributes(glContext, this.attributes.colors, 4);
+		glContext.drawArrays((null == this.mode) ? glContext.TRIANGE_STRIP : this.mode, 0, this.attributes.length);
+	};
+	
+	if(verts) this.setVerts(glContext, verts, locVert);
+	return this;
+}
+
+// locVert -- program location of vertex attribute
+function glCube(glContext, locVert, locColor) {
+	var ret = new glShape(glContext, [
+	    // front
+		0.0, 0.0, 0.0,
+		1.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 1.0, 0.0,
+		// top
+		1.0, 1.0, 1.0,
+		0.0, 1.0, 0.0,
+		0.0, 1.0, 1.0,
+		0.0, 0.0, 0.0,
+		// 
+		0.0, 0.0, 1.0,
+		1.0, 0.0, 0.0,
+		1.0, 0.0, 1.0,
+		1.0, 1.0, 0.0,
+		1.0, 1.0, 1.0,
+		1.0, 0.0, 1.0,
+		0.0, 1.0, 1.0,
+		0.0, 0.0, 1.0
+       ], locVert, glContext.TRIANGLE_STRIP);
+	[ 0.0, 0,0, 1.0, 0.0, 0,0, 1.0, 0.0, 0,0, 1.0, 0.0, 0,0, 1.0,
+	  0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+	  ]
+/*	ret.setColors(glContext,[ 
+			0.0, 0.0, 0.0, 1.0,
+			1.0, 0.0, 0.0, 1.0,
+			0.0, 1.0, 0.0, 1.0,
+			1.0, 1.0, 0.0, 1.0,
+			1.0, 1.0, 1.0, 1.0,
+			0.0, 1.0, 0.0, 1.0,
+			0.0, 1.0, 1.0, 1.0,
+			0.0, 0.0, 0.0, 1.0,
+			0.0, 0.0, 1.0, 1.0,
+			1.0, 0.0, 0.0, 1.0,
+			1.0, 0.0, 1.0, 1.0,
+			1.0, 1.0, 0.0, 1.0,
+			1.0, 1.0, 1.0, 1.0,
+			1.0, 0.0, 1.0, 1.0,
+			0.0, 1.0, 1.0, 1.0,
+			0.0, 0.0, 1.0, 1.0], locColor); */
+	return ret;
+}

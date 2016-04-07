@@ -7,8 +7,11 @@
 	<script src='../../javascript/jquery-1.11.0.min.js'></script>
 	<script src='../../javascript/FileQueue.js'></script>
 	<script src='../../javascript/dicomParser.min.js'></script>
+	<script src='../../javascript/dicom.js'></script>
 	<script src='../../javascript/util.js'></script>
 	<script src='../../javascript/graph2d.js'></script>
+	<script src="./glimp.js"></script>
+	<script src="./GrowCut.js"></script>
 </head>
 <body>
 	<div id="nav">
@@ -72,6 +75,10 @@
 	<H3>DICOM controls</H3>
 	Only 16-bit grayscale currently supported
 	<br>
+	<script>
+		var dicomCtrls = dicom.Deploy(document.getElementById('inputImage'));
+	</script>
+	<script type='x-text/x-test'>
 	<input type='range' min="0.0" max="1.0" value="1.0" step='0.002' id="window"  style='width: 501px;'> Window <span id='windowValue'>1</span>
 	<br>
 	<input type='range' min="0.0" max="1.0" value="0.0" step='0.002' id="level" style='width: 501px;'> Floor <span id='levelValue'>0</span>
@@ -80,6 +87,7 @@
 	<br>
 	<h3>Histogram</h3>
 	<canvas id="hist" width='501' height='100' style="border: 1px solid green;"></canvas>
+	</script>
 	<br>
 	<h3>States &mdash; Labels and Strengths</h3>
 	<table>
@@ -106,6 +114,7 @@
 	<script id="vertexShader" type="gl-shader/vertex">
 		// our default vertex shader
 		precision highp float;
+//		precision lowp float;
 		attribute vec3 coordinate;
 		attribute vec2 textureCoordinate;
 		varying vec2 varyingTextureCoordinate;
@@ -117,20 +126,7 @@
 	</script>
 	<script id="fragmentShaderGrowCut" type="gl-shader/fragment">
 		precision highp float;
-		// the input image -- this won't change, we use it for its color values
-		uniform sampler2D sourceTextureSampler;
-		// the label and strength -- this gets updated each pass
-		// r -- the label, g -- strength 
-		uniform sampler2D stateTextureSampler;
-		// image size
-		uniform vec2 sourceTextureSize;
-		// size of a pixel
-		uniform vec2 sourceTexelSize;
-		// the output mode
-		uniform int mode;
-		// the coordinate
-		varying vec2 varyingTextureCoordinate;
-
+//		precision lowp float;
 		// neighbors are indexed as
 		// 5 1 4
 		// 2 . 0
@@ -149,6 +145,32 @@
        		neighbors[2] = texture2D(samp, pt.xy - ptR).rgb;
        		neighbors[0] = texture2D(samp, pt.xy + ptR).rgb;
 		}
+		void populateNeighbors(in sampler2D samp, in vec2 pt, in vec2 step, out vec4 neighbors[8]) {
+			vec2 ptR = vec2(step.x, 0); // one pixel right
+			vec2 ptU = vec2(0, step.y); // one pixel up
+			// pixels in the neighborhood
+       		neighbors[4] = texture2D(samp, pt.xy + step.xy);
+       		neighbors[6] = texture2D(samp, pt.xy - step.xy);
+       		neighbors[5] = texture2D(samp, pt.xy + ptU - ptR);
+       		neighbors[7] = texture2D(samp, pt.xy - ptU + ptR);
+       		neighbors[3] = texture2D(samp, pt.xy - ptU);
+       		neighbors[1] = texture2D(samp, pt.xy + ptU);
+       		neighbors[2] = texture2D(samp, pt.xy - ptR);
+       		neighbors[0] = texture2D(samp, pt.xy + ptR);
+		}
+		// the input image -- this won't change, we use it for its color values
+		uniform sampler2D sourceTextureSampler;
+		// the label and strength -- this gets updated each pass
+		// r -- the label, g -- strength 
+		uniform sampler2D stateTextureSampler;
+		// image size
+		uniform vec2 sourceTextureSize;
+		// size of a pixel
+		uniform vec2 sourceTexelSize;
+		// the output mode
+		uniform int mode;
+		// the coordinate
+		varying vec2 varyingTextureCoordinate;
 
 		void main(void) {
 			// look up my pixel value
@@ -160,7 +182,7 @@
 				// the output -- my current strength and label
 				vec4 o = vec4(s.r, s.g, 0.0, 1.0);
 				float attackStr;
-				vec3 colors[8], states[8];
+				vec4 colors[8]; vec3 states[8];
 				// get my neighbors colors
 				populateNeighbors(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize, colors);
 				// get my neighbors states (labels and strengths)
@@ -172,11 +194,11 @@
 					// attacking neighbor and this pixel times the strength of the neighbor pixel
 					// i.e. the closer the colors, the stronger the attack
 					// maximum L2 norm -- color difference is (1,1,1) -> sqrt(3)
-					// what's with the 0.002 ???? -- our qunatization is 1/256 = 0.00390625
+					// what's with the 0.002 ???? -- our quantization is 1/256 = 0.00390625
 					// to avoid rounding/quantization errors we'll look at half of that value
 					// otherwise our algorithm may never converge 
 					// (if you don't believe me, set it to 0 and watch the change map keep changing, be glad I did the debugging for you) 
-					if(((attackStr = (1.0 - distance(c.rgb, colors[i]) * 0.57735) * states[i].g) - o.g) > 0.002) {
+					if(((attackStr = (1.0 - distance(c, colors[i]) * 0.57735) * states[i].g) - o.g) > 0.002) {
 						// change my label and strength
 						o.r = states[i].r;
 						o.g = attackStr;
@@ -248,43 +270,8 @@
 		states[1].seeds = [ [ 0.5, 0.5 ] ];
 		// background seeds
 		states[0].seeds = [ [ 0.1, 0.1 ], [0.1, 0.9], [0.9, 0.1], [0.9, 0.9] ];
-		
-		/////////////
-		// the raw dicom pixel data
-		var pixelData;
-		// the parsed dicom file
-		var dicomData;
-		// histogram window/context
-		var ctxHist = document.getElementById('hist').getContext('2d');
-		// the image histogram
-		var hist = new Uint16Array(256);
-		
-		////////////////////////////////////////////////////////////////////////////////
-		// window and level
-		var win = document.getElementById('window');
-		var lvl = document.getElementById('level');
-//		var swp = document.getElementById('swapByte');
-		var winV = document.getElementById('windowValue');
-		var lvlV = document.getElementById('levelValue');
-		var ctxWL = document.getElementById('showWL').getContext('2d');
-		win.onchange = onRender;
-		lvl.onchange = onRender;
-//		swp.onchange = onRender;
-		function drawWindowLevel(ctx, w, l) {
-			ctx.fillStyle='#00D000';			
-			ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-			//ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-			w *= ctx.canvas.width * (1 - l);
-			l *= ctx.canvas.width;
-			var grd=ctx.createLinearGradient(l,0,l + w,ctx.canvas.height);
-			grd.addColorStop(0,"black");
-			grd.addColorStop(1,"white");
-			ctx.fillStyle=grd;			
-			ctx.fillRect(l, 0, w, ctx.canvas.height);
-		}
-		// make sure it's drawn
-		drawWindowLevel(ctxWL, win.value, lvl.value);
-		////////////////////////////////////////////////////////////////////////////////
+
+		var xx = gc.Deploy();
 		
 		/////////////////
 		// state objects and labels
@@ -556,9 +543,10 @@
 		
 		var imageSource = new Image();
 		var textureSource;
+		var dicomData = null;
 		
 		function onImageChange() {
-			console.log('updating source texture');
+			console.log('GrowCut updateImage');
 			ctx.canvas.width = imageSource.width; 
 			ctx.canvas.height = imageSource.height;
 			// texture 0, our input image
@@ -569,9 +557,14 @@
 			// size the output canvas
 			glContext.viewport(0, 0, glContext.canvas.width = imageSource.width, glContext.canvas.height = imageSource.height);
 			onSourceChange(glContext, glProgram, textureSource, imageSource);
+			console.log('GrowCut updateImage');
 			render();
-		}
+			console.log('GrowCut updateImage');
+			xx.updateImage(imageSource);
 			
+		}
+		xx.change = function() {ctxOut.putImageData(outputImageData = xx.stencil(outputImageData), 0, 0);}
+		
 		imageSource.onload = onImageChange;
 
 		// called after a file is selected from the queue and loaded
@@ -579,24 +572,31 @@
 			try {
 				if(this.data instanceof ArrayBuffer) {
 					dicomData = dicomParser.parseDicom(new Uint8Array(this.data));
-					console.log((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser ? 'little' : 'big') + ' endian encoding');
-					console.log((isLittleEndian ? 'little' : 'big') + ' endian system');
-					renderDicom(dicomData, false /*swp.checked*/, win.value, lvl.value);
+					dicomCtrls.onchange();
 				} else {
 					// update the source image
-					if(imageSource instanceof ImageData) {
+					if(!(imageSource instanceof Image)) {
 						imageSource = new Image();
 						imageSource.onload = onImageChange;
 					}
 					dicomData = null;
+					console.log('GrowCut imageSource');
 					imageSource.src = this.data; 
-					colorSource = null;
 				}
 			} catch(ex) {
 				console.log('load error ' + ex);
 			}
 		}
-		
+
+		// called by a window/level change or a new image
+		dicomCtrls.onchange = function() { 
+			if(dicomData != null) { 
+				this.onrender(dicomData); 
+				imageSource = this.imageData; 
+				onImageChange(); 
+			} 
+		}
+	
 
 		// creates a texture of the appropriate size, and binds it to the frame buffer supplied
 		function setupFrameBuffer(glContext, w, h, fb) {
@@ -615,7 +615,7 @@
 		var imageState; // ImageData of initial strengths and labels
 		var texturesState = [null, null]; // two working textures, one is input, one is output
 		var fbState = [glContext.createFramebuffer(), glContext.createFramebuffer() ];
-		var pixels;
+		var pixels; // pull the renderbuffer data to here to check for convergence
 		var outputImageData;
 		
 		// after the source image has been loaded, source image/texture
@@ -721,7 +721,7 @@
 					colorSource = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
 				}
 				updateCanvas(states, ctx);
-				ctx.canvas.style.cursor='wait';
+				document.body.style.cursor='wait';
 				// the outputs
 				var tStart = Date.now();
 				var bDone = false, nMax = maxIter.value, nIter = 0, nCnt = 0, nPass = 0;
@@ -747,7 +747,7 @@
 					if(bDone) break;
 					// check if we converged, or if the last ieration is coming up
 					// only doing it every 8th to try to speed things up
-					if(nIter % 8 == 7 || nIter == nMax - 1) {
+					if(nIter % 16 == 7 || nIter == nMax - 1) {
 						// scan the pixels for change
 						glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
 						// look at the blue pixels (offset 2), these are the change flag
@@ -760,118 +760,8 @@
 				// copy pixels to the output
 				updateOutputImage(ctxOut, outputImageData, pixels, colorSource);
 				document.getElementById('iter').innerHTML = nIter + ', ' + (Date.now() - tStart) + 'ms';
-				ctx.canvas.style.cursor='auto';
+				document.body.style.cursor='auto';
 			}
-		}
-		function renderDicom(dataSet, bSwap, w, l) {
-			if(undefined == bSwap) bSwap = false;
-			if(undefined == w) w = 1.0;
-			if(undefined == l) l = 0;
-			drawWindowLevel(ctxWL, w, l);
-			//w *= (1 - l) * 65535;
-			//l *= 65535;
-			//if(w <= 0.) w = 1;
-			//w /= 256;
-			try {
-//				(0028,0002) US 3                                        #   2, 1 SamplesPerPixel
-//				(0028,0004) CS [RGB]                                    #   4, 1 PhotometricInterpretation
-//			    (0028,0006) US 0                                        #   2, 1 PlanarConfiguration
-//			    (0028,0008) IS [200]                                    #   4, 1 NumberOfFrames
-//			    (0028,0010) US 960                                      #   2, 1 Rows
-//			    (0028,0011) US 1280                                     #   2, 1 Columns
-//			    (0028,0100) US 8                                        #   2, 1 BitsAllocated
-//			    (0028,0101) US 8                                        #   2, 1 BitsStored
-//			    (0028,0102) US 7                                        #   2, 1 HighBit
-//			    (0028,0103) US 0                                        #   2, 1 PixelRepresentation
-//			    (0028,1050) DS [128]                                    #   4, 1 WindowCenter
-//			    (0028,1051) DS [256]                                    #   4, 1 WindowWidth
-//			    (0028,1052) DS [0]                                      #   2, 1 RescaleIntercept
-//			    (0028,1053) DS [1]                                      #   2, 1 RescaleSlope	    
-//			    console.log(photoInterp);
-				var imageInfo = {
-					studyInstanceUid : dataSet.string('x0020000d'), 
-					samplePerPixel : dataSet.uint16('x00280002'),
-					photoInterp : dataSet.string('x00280004'),
-					planarConfig : dataSet.uint16('x00280006'),
-					frames : dataSet.int32('x00280008'),
-					rows : dataSet.uint16('x00280010'),
-					cols : dataSet.uint16('x00280011'),
-					bitsAllocated : dataSet.uint16('x00280100'),
-					bitsStored : dataSet.uint16('x00280101'),
-					highBit : dataSet.uint16('x00280102'),
-					pixelSigned : dataSet.uint16('x00280103'),
-					windowCenter : parseFloat(dataSet.string('x00281050')),
-					windowWidth : parseFloat(dataSet.string('x00281051')),
-					rescaleIntercept : parseFloat(dataSet.string('x00281052')),
-					rescaleSlope : parseFloat(dataSet.string('x00281053'))
-				};
-				console.log(imageInfo);
-
-				// get the pixel data element (contains the offset and length of the data)
-				var pixelDataElement = dataSet.elements.x7fe00010;
-	    
-//			    document.getElementById('dcmStudy').innerHTML = studyInstanceUid;
-//			    document.getElementById('dcmRows').innerHTML = nRows;
-//			    document.getElementById('dcmCols').innerHTML = nCols;
-//			    document.getElementById('dcmBPP').innerHTML = nBitsPerPixel;
-//			    document.getElementById('dcmSPP').innerHTML = nSamplesPerPixel;
-			    
-				if(imageInfo.pixelSigned)
-					pixelData = new Int16Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length / 2);
-				else
-					pixelData = new Uint16Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length / 2);
-
-				var nRows = imageInfo.rows;
-				var nCols = imageInfo.cols;
-			    ctx.canvas.width = nCols;
-			    ctx.canvas.height = nRows;
-			    imageSource = ctx.createImageData(nRows, nCols);
-			    imageInfo.windowWidth *= 1.5; // expanding the window a bit
-			    var pixelMin = imageInfo.windowCenter - imageInfo.windowWidth / 2;
-			    
-			    // calculate the floor and window in pixel values
-			    l = Math.floor(imageInfo.windowWidth * l + 0.5);
-			    w = Math.floor(w * (imageInfo.windowWidth - l) + 0.5);
-			    l += pixelMin;
-			    if(w < 1) w = 1;
-				console.log('min: ' + pixelMin + ', max: ' + (pixelMin + imageInfo.windowWidth) + ', floor: ' + l + ', window: ' + w);
-			    //hist.fill(0);
-			    for(var i = 0; i < hist.length; ++i) hist[i] = 0;
-				// if the endian-ness doesn't match, we need to swap (or toggle the swap request)
-				if((dicomData.byteArrayParser === dicomParser.littleEndianByteArrayParser) != isLittleEndian) bSwap = !bSwap;
-			    for(var iSrc = 0, iDst = 0; iSrc < pixelData.length; ++iSrc, iDst += 4) {
-			    	b = pixelData[iSrc];
-			    	if(bSwap) b = ((b & 0xff00) >> 8) | ((b & 0x00ff) << 8);
-			    	if(b <= l) {
-			    		b = 0;
-			    		imageSource.data[iDst+2] = imageSource.data[iDst+1] = imageSource.data[iDst] = 0;
-			    	} else {
-			    		b -= l;
-			    		if(b >= w) {
-			    			imageSource.data[iDst] = imageSource.data[iDst+1] = imageSource.data[iDst+2] = 255;
-			    		} else {
-				    		b = (b >= w) ? 255 : Math.floor(255 * (b / w) + 0.5);
-				    		imageSource.data[iDst] = imageSource.data[iDst+1] = imageSource.data[iDst+2] = b;
-			    		}
-			    	}
-			    	imageSource.data[iDst+3] = 255;
-			    	++hist[imageSource.data[iDst]];
-			    }
-			    hist[0] = 0;
-			    hist[255] = 0;
-				drawBarGraph(ctxHist, hist);
-				onImageChange();
-			} catch(ex) {
-			   	console.log('Error rendering dicom');
-				console.log(ex);
-			}
-			
-		}
-		function onRender() {
-			winV.innerHTML = win.value;
-			lvlV.innerHTML = lvl.value;
-			if(undefined != dicomData && null != dicomData)
-				renderDicom(dicomData, false /*swp.checked*/, win.value, lvl.value);
 		}
 	</script>
 </body>

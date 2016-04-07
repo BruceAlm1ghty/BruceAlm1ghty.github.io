@@ -17,22 +17,12 @@ var fileQueue = (function() {
 	/**
 	 * keep track of fileQueue objects created
 	 */
-	this.deployed = [];
+	var fq = {
+		deployed : []
+	};
 
-	function create(el, parent, id) {
-		var e = document.createElement(el);
-		if(undefined != id) e.setAttribute('id', id);
-		if(undefined != parent) parent.appendChild(e);
-		return e;
-	}
-	function createButton(id, label, parent) {
-		var ret = create('BUTTON', parent, id);
-		ret.setAttribute('type', 'button');
-		if(undefined != label) ret.innerHTML = label;
-		return ret;
-	}
-	this.Deploy = function (par, idPrefix) {
-		if(undefined == par) par = document.body;
+	fq.Deploy = function (par, idPrefix) {
+		if(!par) par = document.body;
 		var ret = {
 				// controls -- in the order of enumerates
 				load : null,
@@ -56,7 +46,7 @@ var fileQueue = (function() {
 				// text labels for buttons
 				labels : [ null, 'Append Files', null, 'Remove All', '&#x25B2;', 'Remove Sel', '&#x25BC;', '&#x25C4;', null, '&#x25BA;', null ],
 				onload : null,  // update function, called by (default) onread after setting data
-				onread : function(f) { readFile(this, f); },// default reader, read the supplied File object, place the result in data, call toImage or toCanvas send it to an image or canvas
+				onread : function(f) { fq.readFile(this, f); },// default reader, read the supplied File object, place the result in data, call toImage or toCanvas send it to an image or canvas
 				data : null,
 				toImage : function(img) { return toImage(img, this.data); },
 				toCanvas : function(cvs) { return toCanvas(cvs, this.data); },
@@ -65,7 +55,7 @@ var fileQueue = (function() {
 				/** create a button of id i */ 
 				createButton : function (i, par) { return this[this.prop[i]] = createButton(this.ids[i], this.labels[i], undefined == par ? this.parent : par); },
 				/** create a control of type ty with id ids[i] */ 
-				create : function(i, ty, par) {	return this[this.prop[i]] = create(ty, undefined == par ? this.parent : par, this.ids[i]); },
+				create : function(i, ty, par) {	return this[this.prop[i]] = createElement(ty, undefined == par ? this.parent : par, this.ids[i]); },
 				enableButtons : function() { enableButtons(this); },
 				///// event handler helpers
 				onFileUp : function() { var i = this.sel.selectedIndex; if(i > 0) fileSwap(this, i - 1, i); },
@@ -88,19 +78,19 @@ var fileQueue = (function() {
 		ret.append.setAttribute('type', 'checkbox');
 		//ret.append.innerHTML = ret.labels[ret.APPEND];
 		ret.append.insertAdjacentHTML('afterend', ret.labels[ret.APPEND]);
-		create('br', par);
-		ret.table = create('TABLE', par);
-		var row = create('TR', ret.table);
-		var el = create('TD', row);
+		createElement('br', par);
+		ret.table = createElement('TABLE', par);
+		var row = createElement('TR', ret.table);
+		var el = createElement('TD', row);
 		el.setAttribute('rowspan', 5);
 		// the selection box
 		ret.create(ret.SEL, 'SELECT', el).setAttribute('size', 7);
-		el = create('TH', row);
+		el = createElement('TH', row);
 		el.setAttribute('style', 'text-align: left;');
 		el.innerHTML = 'Edit List';
 		for(var i = ret.CLEAR; i <= ret.DOWN; ++i)
-			ret.createButton(i, create('TD', create('TR', ret.table)));
-		(el = create('p', par)).innerHTML = 'Scroll Images ';
+			ret.createButton(i, createElement('TD', createElement('TR', ret.table)));
+		(el = createElement('p', par)).innerHTML = 'Scroll Images ';
 		ret.createButton(ret.PREV, el);
 		ret.create(ret.SLIDE, 'INPUT', el).setAttribute('type', 'range');
 		ret.slider.setAttribute('min', 0);
@@ -128,7 +118,7 @@ var fileQueue = (function() {
 	};
 	// given an event, find which fileQueue object owns the target
 	function findFromTarget(evt) {
-		for(var x = 0; x < fileQueue.deployed.length; ++i) {
+		for(var x = 0; x < fileQueue.deployed.length; ++x) {
 			var t = fileQueue.deployed[x];
 			for(var i = 0; i < t.MAX; ++i)
 				if(evt.target == t[t.prop[i]])
@@ -215,15 +205,15 @@ var fileQueue = (function() {
 		x.sel.selectedIndex = 0;
 		enableButtons(x);
 	}
-	this.readFile = function(x, file) {
+	fq.readFile = function(x, file) {
 		if (file.type.match('image.*') == null && file.type.match('video.*') == null && file.type.match('audio.*') == null)
-			readBufferFile(x, file);
+			fq.readBufferFile(x, file);
 		else
-			readDataFile(x, file);
+			fq.readDataFile(x, file);
 	}
 	/** given a fileQueue object and file, set the data member to the read file
 	 */
-	this.readDataFile = function(x, file) {
+	fq.readDataFile = function(x, file) {
 		var reader = new FileReader();
 		reader.onloadend = function() {
 			x.data = this.result;
@@ -239,7 +229,7 @@ var fileQueue = (function() {
 	}
 	/** given a fileQueue object and file, set the data member to the read array buffer
 	 */
-	this.readBufferFile = function(x, file) {
+	fq.readBufferFile = function(x, file) {
 		var reader = new FileReader();
 		reader.onloadend = function() {
 			x.data = this.result;
@@ -260,14 +250,14 @@ var fileQueue = (function() {
 		processFileList(x, files, x.append.checked);
 		if(files.length > 0) onChooseFile(x, x.append.checked && i >= 0 ? i : 0);
 	}
-	this.toImage = function(target, data) {
+	fq.toImage = function(target, data) {
 		try {
 			target.src = data;
 			return true;
 		} catch(ex) {}
 		return false;
 	}
-	this.toCanvas = function(target, data) {
+	fq.toCanvas = function(target, data) {
 		try {
 			var image = new Image;
 			image.src = data;
@@ -282,5 +272,5 @@ var fileQueue = (function() {
 		} catch(ex) {}
 		return false;
 	}
-	return this;
+	return fq;
 })();

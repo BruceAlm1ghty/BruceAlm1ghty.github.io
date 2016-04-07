@@ -4,6 +4,7 @@
 	<meta charset="ISO-8859-1">
 	<title>Modularized</title>
 	<script src="../gl-setup.js"></script>
+	<script src="../gl-matrix-min.js"></script>
 </head>
 <body>
 
@@ -16,7 +17,9 @@
 		varying lowp vec4 vColor;
     	
       	void main(void) {
-        	gl_FragColor = vColor;
+			if(vColor.r > 0. || vColor.g > 0. || vColor.b > 0.)
+        		gl_FragColor = vColor;
+			gl_FragColor = vec4(0.1, 0.3, 0.7, 0.2);
       	}
 	</script>
 	<script id="shader-vert-color" type="x-shader/x-vertex">
@@ -32,7 +35,6 @@
       	void main(void) {
 	        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
    	    	vColor = aVertexColor;
-			 
       	}
 	</script>
 
@@ -42,6 +44,59 @@
 		var glProgram = initProgramById(glContext, 'shader-vert-color', 'shader-frag-color');
 		console.log(glContext);
 		console.log(glProgram);
+		
+		// get the location of the position attribute from our vertex shader         
+		glProgram.vertexPositionAttribute = glContext.getAttribLocation(glProgram, "aVertexPosition");
+        // and enable it
+        glContext.enableVertexAttribArray(glProgram.vertexPositionAttribute);
+        console.log(glProgram.vertexPositionAttribute);
+
+        
+        // get the location of our two transform matrices from our vertex shaders
+        glProgram.pMatrixUniform = glContext.getUniformLocation(glProgram, "uPMatrix");
+        glProgram.mvMatrixUniform = glContext.getUniformLocation(glProgram, "uMVMatrix");
+	
+	    var mvMatrix = mat4.create();
+	    var pMatrix = mat4.create();
+	
+	    // this function copies the matrix data to the vertex shader
+	    function setMatrixUniforms() {
+	        glContext.uniformMatrix4fv(glProgram.pMatrixUniform, false, pMatrix);
+	        glContext.uniformMatrix4fv(glProgram.mvMatrixUniform, false, mvMatrix);
+	    }
+
+        // set our view port
+		glContext.viewport(0, 0, glContext.canvas.width, glContext.canvas.height);
+		glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+		
+		// create a perspective matrix
+	    mat4.perspective(pMatrix, 0.785, glContext.canvas.width / glContext.canvas.height, 0.1, 10.0);
+		// initialize the move matrix
+		mat4.identity(mvMatrix);
+		// create a translation to the triable coorinates
+        mat4.translate(mvMatrix, mvMatrix,[-0.5, 0.0, -3.0]);
+        mat4.rotateY(mvMatrix, mvMatrix, 1.0)
+        mat4.rotateX(mvMatrix, mvMatrix, 0.4)
+
+        var xCube = glCube(glContext, glProgram.vertexPositionAttribute, glContext.getAttribLocation(glProgram, "aVertexColor"));
+		var i = 0;
+		//The setInterval() method calls a function or evaluates an expression at specified intervals (in milliseconds).
+		setInterval(function() {
+			++i;
+			if(i > 125) {
+				if(i > 250) {
+		        	mat4.rotateZ(mvMatrix, mvMatrix, 0.05);
+		        	if(i > 375) i = 0;
+				} else 
+	        		mat4.rotateX(mvMatrix, mvMatrix, 0.05);
+			} else 
+	        	mat4.rotateY(mvMatrix, mvMatrix, 0.05);
+			
+	        setMatrixUniforms();
+			glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+			xCube.draw(glContext);
+		}, 50)
+
 	</script>
 
 </body>

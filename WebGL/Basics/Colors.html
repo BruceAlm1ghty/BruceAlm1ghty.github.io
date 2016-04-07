@@ -3,7 +3,7 @@
 <head>
 <meta charset="ISO-8859-1">
 <title>Shapes and Colors</title>
-	<script src="../../jquery-1.11.0.min.js"></script>
+	<script src="../../javascript/jquery-1.11.0.min.js"></script>
 	<script src="../gl-matrix-min.js"></script>
 	<link rel="stylesheet" href="../webgl.css" />
 </head>
@@ -179,7 +179,7 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
         gl.vertexAttribPointer(glProgram.vertexPositionAttribute, squareVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
         setMatrixUniforms();
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, squareVertexPositionBuffer.numItems);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, squareVertexPositionBuffer.numItems);
 	</script>
 </body>
 </html>
