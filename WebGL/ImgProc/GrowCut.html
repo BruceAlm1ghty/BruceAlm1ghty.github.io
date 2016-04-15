@@ -11,7 +11,6 @@
 	<script src='../../javascript/util.js'></script>
 	<script src='../../javascript/graph2d.js'></script>
 	<script src="./glimp.js"></script>
-	<script src="./GrowCut.js"></script>
 </head>
 <body>
 	<div id="nav">
@@ -158,6 +157,20 @@
        		neighbors[2] = texture2D(samp, pt.xy - ptR);
        		neighbors[0] = texture2D(samp, pt.xy + ptR);
 		}
+		void populateNeighbors(in sampler2D samp, in vec2 pt, in vec2 step, out vec4 neighbors[8], in sampler2D s2, out vec3 state[8]) {
+			vec2 ptR = vec2(step.x, 0); // one pixel right
+			vec2 ptU = vec2(0, step.y); // one pixel up
+			vec2 xpt;
+			// pixels in the neighborhood
+       		neighbors[4] = texture2D(samp, xpt = pt.xy + step.xy); state[4] = texture2D(s2, xpt).rgb;
+       		neighbors[6] = texture2D(samp, xpt = pt.xy - step.xy); state[6] = texture2D(s2, xpt).rgb;
+       		neighbors[5] = texture2D(samp, xpt = pt.xy + ptU - ptR); state[5] = texture2D(s2, xpt).rgb;
+       		neighbors[7] = texture2D(samp, xpt = pt.xy - ptU + ptR); state[7] = texture2D(s2, xpt).rgb;
+       		neighbors[3] = texture2D(samp, xpt = pt.xy - ptU); state[3] = texture2D(s2, xpt).rgb;
+       		neighbors[1] = texture2D(samp, xpt = pt.xy + ptU); state[1] = texture2D(s2, xpt).rgb;
+       		neighbors[2] = texture2D(samp, xpt = pt.xy - ptR); state[2] = texture2D(s2, xpt).rgb;
+       		neighbors[0] = texture2D(samp, xpt = pt.xy + ptR); state[0] = texture2D(s2, xpt).rgb;
+		}
 		// the input image -- this won't change, we use it for its color values
 		uniform sampler2D sourceTextureSampler;
 		// the label and strength -- this gets updated each pass
@@ -172,6 +185,10 @@
 		// the coordinate
 		varying vec2 varyingTextureCoordinate;
 
+		float d2(vec4 x, vec4 y) {
+			float dx = x.r - y.r, dy = x.g - y.g, dz = x.b - y.b;
+			return dx * dx + dy * dy + dz * dz; 
+		}
 		void main(void) {
 			// look up my pixel value
   			vec4 c = texture2D(sourceTextureSampler, varyingTextureCoordinate);
@@ -181,8 +198,9 @@
 				// iterating 
 				// the output -- my current strength and label
 				vec4 o = vec4(s.r, s.g, 0.0, 1.0);
-				float attackStr;
+				float attackStr, str = s.g;
 				vec4 colors[8]; vec3 states[8];
+				//if(gc_populateNeighbors(stateTextureSampler, varyingTextureCoordinate, sourceTexelSize, states)) {
 				// get my neighbors colors
 				populateNeighbors(sourceTextureSampler, varyingTextureCoordinate, sourceTexelSize, colors);
 				// get my neighbors states (labels and strengths)
@@ -197,12 +215,10 @@
 					// what's with the 0.002 ???? -- our quantization is 1/256 = 0.00390625
 					// to avoid rounding/quantization errors we'll look at half of that value
 					// otherwise our algorithm may never converge 
-					// (if you don't believe me, set it to 0 and watch the change map keep changing, be glad I did the debugging for you) 
-					if(((attackStr = (1.0 - distance(c, colors[i]) * 0.57735) * states[i].g) - o.g) > 0.002) {
+					// (if you don't believe me, set it to 0 and watch the change map keep changing, be glad I did the debugging for you)
+					if(((attackStr = (1.0 - distance(c, colors[i]) * 0.57735) * states[i].g) - str) > 0.002) {
 						// change my label and strength
-						o.r = states[i].r;
-						o.g = attackStr;
-						o.b = 1.0; // flag that we made a change
+						o = vec4(states[i].r, str = attackStr, 1.0, 1.0);
 					}
 				}
 				gl_FragColor = o;
@@ -271,7 +287,7 @@
 		// background seeds
 		states[0].seeds = [ [ 0.1, 0.1 ], [0.1, 0.9], [0.9, 0.1], [0.9, 0.9] ];
 
-		var xx = gc.Deploy();
+		//var xx = gc.Deploy();
 		
 		/////////////////
 		// state objects and labels
@@ -426,10 +442,14 @@
 		var mouseOver = [];
 		// we're dragging a seed point
 		var mouseDrag = false;
+		// max iter while dragging
+		var maxIterOrig = maxIter.value;
 		function onMouseDown(evt) {
 			if(mouseOver.length > 0) {
 				// dragging
 				mouseDrag = true;
+				maxIterOrig = maxIter.value;
+				maxIter.value = 256;
 //				console.log('drag');
 			}
 		    evt.stopPropagation();
@@ -452,6 +472,7 @@
 		    	// moving a seed
 	    		states[mouseOver[0][0]].seeds[mouseOver[0][1]] = [evt.offsetX / ctx.canvas.width, 1 - evt.offsetY / ctx.canvas.height];
 		    	mouseDrag = false;
+		    	maxIter.value = maxIterOrig;
 		    	render();
 		    }
 		}
@@ -478,6 +499,9 @@
 				}
 				mouseOver = [];
 				ctx.canvas.style.cursor='crosshair';
+			} else {
+	    		states[mouseOver[0][0]].seeds[mouseOver[0][1]] = [evt.offsetX / ctx.canvas.width, 1 - evt.offsetY / ctx.canvas.height];
+		    	render();
 			}
 		}
 		function onMouseEnter(evt) {
@@ -560,10 +584,10 @@
 			console.log('GrowCut updateImage');
 			render();
 			console.log('GrowCut updateImage');
-			xx.updateImage(imageSource);
+			//xx.updateImage(imageSource);
 			
 		}
-		xx.change = function() {ctxOut.putImageData(outputImageData = xx.stencil(outputImageData), 0, 0);}
+		//xx.change = function() {ctxOut.putImageData(outputImageData = xx.stencil(outputImageData), 0, 0);}
 		
 		imageSource.onload = onImageChange;
 
@@ -700,12 +724,26 @@
 					    		outputImageData.data[i+2] = inputImageData.data[i+2];
 					    		outputImageData.data[i+3] = inputImageData.data[i+3];
 				    		} else {
-					    		outputImageData.data[i] = outputImageData.data[i+1] = outputImageData.data[i+2] = outputImageData.data[i+3] = 0;
-				    		}
+					    		outputImageData.data[i] = outputImageData.data[i+1] = outputImageData.data[i+2] = 0; outputImageData.data[i+3] = 48;
+//					    		outputImageData.data[i] = 255 -inputImageData.data[i];
+//					    		outputImageData.data[i+1] = 255 -inputImageData.data[i+1];
+//					    		outputImageData.data[i+2] = 255 - inputImageData.data[i+2];
+							}
 				    	}
 				    }
 		    	}
-			    ctx.putImageData(outputImageData, 0, 0);
+		    	{
+		    		var grd=ctx.createRadialGradient(ctx.canvas.width/2,ctx.canvas.height/2,5,ctx.canvas.width/2,ctx.canvas.height/2,Math.max(ctx.canvas.width/2,ctx.canvas.height/2));
+//		    		var grd=ctx.createLinearGradient(0, 0, 0, ctx.canvas.height);
+			    	grd.addColorStop(0,"rgb(160,160,160)");
+			    	grd.addColorStop(1,"rgb(8,8,8)");
+			    	
+			    	// Fill with gradient
+			    	ctx.fillStyle = grd;
+			    	ctx.fillRect(0,0,ctx.canvas.width,ctx.canvas.height);
+			    	ctx.globalCompositeOperation = "soft-light";
+		    	}
+				ctx.putImageData(outputImageData, 0, 0);
 		    }
 		}
 		function render() {
@@ -747,7 +785,7 @@
 					if(bDone) break;
 					// check if we converged, or if the last ieration is coming up
 					// only doing it every 8th to try to speed things up
-					if(nIter % 16 == 7 || nIter == nMax - 1) {
+					if(((nIter % 16) == 7 && (mouseDrag == false || nIter < 128)) || nIter == nMax - 1) {
 						// scan the pixels for change
 						glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
 						// look at the blue pixels (offset 2), these are the change flag

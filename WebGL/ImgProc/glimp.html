@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="ISO-8859-1">
+	<title>Default GLIMP set-up</title>
+	<script src='../../javascript/util.js'></script>
+	<script src='../../javascript/jquery-1.11.0.min.js'></script>
+	<script src='../../javascript/graph2d.js'></script>
+	<script src="../gl-setup.js"></script>
+	<script src="./glimp.js"></script>
+	<script src="./blur.js"></script>
+	<script src="./GrowCut.js"></script>
+	<script src="./MeanShift.js"></script>
+</head>
+<body>
+	<input type="file" accept="image/*,*/*" id="files" /><br>
+	<canvas id='image'></canvas>
+	<canvas id='out'></canvas>
+	<br>
+	<script>
+	
+	var x = new glimp.gc(document.getElementById('image')); // new glimp.blur(document.getElementById('image'), document.getElementById('canvas'));
+//	x.deployMaxIter();
+	x.deploy();
+//	var y = new glimp.blur(document.getElementById('image')); //createElement('IMG', document.body));
+//	y.deploy();
+	function handleFileSelect(evt) {
+		if(evt.target.files.length) {
+			x.readSourceFile(evt.target.files[0]);
+		}
+	}
+	document.getElementById('files').addEventListener('change', handleFileSelect, false);
+
+	x.change = function() { 
+		var c = document.getElementById('out');
+		var ctx = c.getContext('2d');
+		if(this.source.encode) {
+			c.width = this.source.encode.width, c.height = this.source.encode.height;
+			ctx.putImageData(this.source.encode, 0, 0);
+		}
+	}
+//	document.getElementById('image').onload = (function(y) { var t = y; return function() { 
+//		t.updateSource(x.source.image); 
+//		}})(y);
+	
+	/*
+	if(false) {
+		var bs = {
+				ctor : function(x) {
+					console.log('bs.ctor called ' + x);
+					console.log(this);
+					console.log(this.z);
+					this.x = x;
+					return this;
+				}
+		};
+		console.log(bs.ctor);
+		bs.ctor.prototype.z = 'not z';
+		//this makes sure all the elements we want in bs.ctor exist
+		bs.ctor.protoype = { x : null, z : null };
+		console.log(bs.ctor.prototype);
+		var bsctor = new bs.ctor('x');
+		console.log(bsctor);
+		console.log(bsctor.z);
+		console.log(bsctor.prototype);
+		
+		var dv = {
+				ctor : function(x, y) {
+					console.log('dv.ctor called ' + x + ', ' + y);
+					console.log(this);
+					console.log(this.z);
+					console.log(this.w);
+					// either one works, but arguments will also contain 'y' which our bs.ctor doesn't know or care about
+				//	bs.ctor.call(this, x); // invoke the base class constructor
+					bs.ctor.apply(this, arguments);
+					console.log('dv.ctor called bs.ctor');
+					this.y = y;
+					return this;
+				}
+		};
+		// if we don't do this, then dv.ctor will inherit from its own prototype, which is Object,
+		// and it will not know what 'z' is, as defined in bs.ctor.prototype
+		dv.ctor.prototype = new bs.ctor;
+		dv.ctor.prototype.constructor = dv.ctor;
+		dv.ctor.prototype.w = 'w';
+		
+		var ctor = new dv.ctor('x', 'y');
+		console.log(ctor);
+		console.log(ctor.z);
+		console.log(ctor.w);
+	}
+	
+//		var x = new glimp.algorithms.blur.ctor(document.getElementById('image'));
+	console.log('pre-gc ctor');
+		var x = new glimp.algorithms.growCut.ctor(document.getElementById('image'));
+	console.log('post-gc ctor');
+		console.log(x);
+		x.deploy();
+		console.log(x.algorithm);
+		function handleFileSelect(evt) {
+			if(evt.target.files.length) {
+				x.readSourceFile(evt.target.files[0]);
+			}
+		}
+		document.getElementById('files').addEventListener('change', handleFileSelect, false);
+
+		var y = new glimp.algorithms.meanShift.ctor(document.getElementById('image'));
+		y.deploy();
+		document.getElementById('image').onload = (function(y) { var t = y; return function() { 
+			t.updateSource(); 
+			}})(y);
+		*/
+</script>
+</body>
+</html>

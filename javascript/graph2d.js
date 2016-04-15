@@ -38,10 +38,10 @@ function drawLineGraph(g, values, w) {
  * set the fill style to set the color
  * e.g., g.fillStyle="#FF0000";  red bars
  */
-function drawBarGraph(g, values) {
+function drawBarGraph(g, values, bClear) {
 	g.save();
 	g.setTransform(1,0,0,1,0,0);
-	g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+	if(null == bClear || undefined == bClear|| bClear == true) g.clearRect(0, 0, g.canvas.width, g.canvas.height);
 	var YMinMax = findMinMax(values);
 	var YMin = YMinMax[0];
 	var YMax = YMinMax[1];

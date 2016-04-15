@@ -8,10 +8,11 @@ function initCanvas(canvas) {
 //	var glContext = canvas.getContext("webgl", {preserveDrawingBuffer: true});
 		var glContext = canvas.getContext("webgl");
 		if (!glContext) {
-			if(!(glContext = canvas.getContext("experimental-webgl")))
+			if(!(glContext = canvas.getContext("experimental-webgl"))) {
 				console.log("can't create context");
 				return null;
 			}
+		}
 		// some basic set up
 		glContext.clearColor(0.0, 0.0, 0.0, 1.0); // black, fully opaque
 		glContext.enable(glContext.DEPTH_TEST);
@@ -21,7 +22,7 @@ function initCanvas(canvas) {
 		return glContext;
 	}
 	console.log('bad canvas')
-	console.log(c); 
+	console.log(canvas); 
 	return null;
 }
 
@@ -79,6 +80,7 @@ function initProgram(glContext, textVertexShader, textFragmentShader) {
 		return glProgram;
 	}
 	console.log('no context');
+	console.log(glContext);
 	return null;
 }
 
@@ -166,6 +168,14 @@ function setAttributeBuffer(glContext, attrib, buffer, length) {
    // bind our coordinate buffer to the attribute
    glContext.bindBuffer(glContext.ARRAY_BUFFER, buffer);
    glContext.vertexAttribPointer(attrib, length, glContext.FLOAT, false, 0, 0); 
+}
+
+function getPixels(glContext, pixels) {
+	if(!pixels || pixels.length != glContext.canvas.width * glContext.canvas.height * 4)
+		pixels = new Uint8Array(glContext.canvas.width * glContext.canvas.height * 4);
+	// scan the pixels for change
+	glContext.readPixels(0, 0, glContext.canvas.width, glContext.canvas.height, glContext.RGBA, glContext.UNSIGNED_BYTE, pixels);
+	return pixels;
 }
 
 function glShape(glContext, verts, locVert, mode) {
