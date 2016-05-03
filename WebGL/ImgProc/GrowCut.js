@@ -40,37 +40,50 @@ var gc = (function(gc){
 			add : null, 
 			clear : null, 
 			del : null,
+			hist : null
 		};
 		
 		this.fragment.main = gc.fragment.main;
 		this.fragment.vars = glimp.fragment.vars + gc.fragment.vars;
 		this.fragment.neighbors = true;
 		
-		/*	
-		this.updateImage = function(img) { 
-			this.seed.image = img;
-			this.seed.context.canvas.width = img.width; 
-			this.seed.context.canvas.height = img.height;
-			if(this.update()) this.update(); 
-		};
-		*/
-		// function to render the seed canvas before updating with the seed points
-//		this.drawSeedImage = function() { gc.drawSeedImage(this.seed); };
 		// copies the color image to output image data only for the masked states
 		// mask is an boolean array for each state, e.g. [false, true, true, false, true]
 		this.stencil = function(imagedata, mask) {
-			if(this.seed.color) {
-				if(!imagedata) imagedata = this.seed.context.createImageData(this.seed.canvas.wdith, this.seed.canvas.height);
+			if(this.source.color) {
+				if(!(imagedata = gc.makeImageData.call(this, imagedata))) return null;
 				if(!mask) {
 					mask = [];
 					for(var i = 0; i < this.states.length; ++i) mask.push(i > 0);
 				}
-				console.log(this.seed.color);
-				gc.stencil(this.seed.color.data, this.out.pixels, imagedata.data, mask, this.seed.color.width * 4);
+				gc.stencil(this.source.color.data, this.pixels, imagedata.data, mask, this.source.color.width * 4);
 			}
 			return imagedata;
 		};
-
+		this.grayscale = function(imagedata, nPix) {
+			if(this.source.color) {
+				if(!(imagedata = gc.makeImageData.call(this, imagedata))) return null;
+				gc.grayscale(this.pixels, imagedata.data, this.source.color.width * 4, nPix);
+			}
+			return imagedata;
+		};
+		this.labelImage = function(imagedata) { return this.grayscale(imagedata, 0); }
+		this.strengthImage = function(imagedata) { return this.grayscale(imagedata, 1); }
+		this.changeImage = function(imagedata) { return this.grayscale(imagedata, 2); }
+		this.stateImage = function(imagedata) {
+			if(this.source.color) {
+				if(!(imagedata = gc.makeImageData.call(this, imagedata))) return null;
+				mapFlipY(this.pixels, imagedata.data, this.source.color.width * 4);
+			}
+			return imagedata;
+		}
+		this.inputImage = function(imagedata) {
+			if(this.source.color) {
+				if(!(imagedata = gc.makeImageData.call(this, imagedata))) return null;
+				for(var i = 0; i < this.source.color.data.length; ++i) imagedata.data[i] = this.source.color.data[i];
+			}
+			return imagedata;
+		}
 		this.mode = function(m) {
 			this.context.uniform1i(this.context.getUniformLocation(this.program, "mode"), m);
 		};
@@ -78,6 +91,7 @@ var gc = (function(gc){
 			this.mode(this.iterations == this.max - 1 ? -4 : 0);
 			return gc.done.call(this);
 		};
+		this.populateStencilMask = function(ctrlSelect) { return gc.populateStencilMask(this, ctrlSelect); }
 		return this;
 	};
 	// point to the base type
@@ -97,16 +111,6 @@ var gc = (function(gc){
 		if(this.source.element == null)
 			this.source.element = createElement('CANVAS', this.parent);
 
-/*		{
-		var t = createElement('TABLE', this.parent);
-		var r = createElement('TR', t);
-		createElement('TH', r).innerHTML = 'iterations';
-		this.controls.iterations = createElement('TD', r);
-		createElement('TH', r).innerHTML = 'time';
-		this.controls.time = createElement('TD', r);
-		createElement('TD', r).innerHTML = 'ms';
-		}*/
-		
 		createElement('H3', this.parent).innerHTML = 'States \&mdash; Labels and Strengths'; 
 		var t = createElement('TABLE', this.parent);
 		var r = createElement('TR', t);
@@ -128,6 +132,8 @@ var gc = (function(gc){
 		controls.add = createButton(null, 'Add', this.parent);
 		controls.clear = createButton(null, 'Clear', this.parent);
 		controls.del = createButton(null, 'Delete', this.parent);
+		createElement('br', this.parent);
+		controls.hist = createCanvas(null, 400, 40, this.parent).getContext('2d');
 		
 		//<h3>Output State Map</h3><canvas id='workingImage'></canvas>
 		if(!this.canvas) {
@@ -176,7 +182,7 @@ var gc = (function(gc){
 		this.label = label;
 		// strength should really be per seed point, no reason all seeds have to have the same strength -- future work
 		this.str = (undefined == str || str.length < 1) ? 1.0 : str;
-		this.setStr = function(x) { if(undefined != str && str.length > 0) this.str = x; return this.str; }
+		this.setStr = function(x) { if(x) this.str = x; return this.str; }
 		this.color = (undefined == color) ? '#ff0000' : color;
 //		this.text = function() { return this.label + ' : ' +  this.str + ' : ' + this.color + ' : ' + this.seeds.length + ' seed(s)'; }
 		this.text = function() { return this.label + ' : ' +  this.str + ' : ' + this.seeds.length + ' seed(s)'; }
@@ -257,16 +263,18 @@ var gc = (function(gc){
 		var str = this.controls.strength.value;
 		for(var i = 0; i < this.states.length; ++i)
 			if(this.states[i].label == label) {
+				// updating
 				this.states[i].setStr(str);
-				this.states[i].color = controls.color.value;
+				this.states[i].color = this.controls.color.value;
 				gc.onUpdateStates(this.states, this.controls.list);
+				if(this.update) this.update();
 				return;
 			}
+		// no matches, add a new state
 		this.states.push(new gc.state(label, str, this.controls.color.value));
+		gc.onUpdateStates(this.states, this.controls.list);
 		this.controls.list.selectedIndex = this.controls.list.length - 1;
 		gc.populateState.call(this); //controls, controls.states[controls.list.length - 1]);
-		gc.onUpdateStates(this.states, this.controls.list);
-
 	};
 	
 	// populate the select ctrl with states
@@ -331,7 +339,7 @@ var gc = (function(gc){
 			this.controls.del.disabled = true;
 			this.controls.clear.disabled = true;
 			this.controls.add.innerHTML = 'Add';
-			this.controls.add.disabled = controls.label.value.length == 0;
+			this.controls.add.disabled = this.controls.label.value.length == 0;
 		} else
 			// it does
 			gc.populateState.call(this);
@@ -487,7 +495,8 @@ var gc = (function(gc){
 				this.context.framebufferTexture2D(this.context.FRAMEBUFFER, this.context.COLOR_ATTACHMENT0, this.context.TEXTURE_2D, this.textures[i] = imageToTexture(this.context, this.source.encode), 0);
 				if(old) this.context.deleteTexture(old);
 			}
-			glimp.common.update.call(this);
+			this.render(); //glimp.common.update.call(this);
+			gc.drawPixelsPerState.call(this);
 		}
 	};
 	
@@ -571,8 +580,6 @@ var gc = (function(gc){
 	 * mask -- boolean array, if null or undefined, all states except the first
 	 * */
 	gc.stencil = function(src, out, imagedata, mask, w) {
-		console.log(mask);
-		console.log(w);
 		if(mask && src && out && imagedata) {
 			// calculate the label packing
 			var label = Math.floor(256 / mask.length / 2);
@@ -580,16 +587,35 @@ var gc = (function(gc){
 			//var s;
 			mapFlipY(src, imagedata, w, out, (function(s, m) { var step = s; var mask = m; return function(dst, src, i, test, it) {
 				var s = Math.floor(test[it] / step);
-				if(s < 0 || s >= mask.length || mask[s] == false)
-					dst[i] = dst[i + 1] = dst[i + 2] = dst[i + 3] = 0.0;
-				else {
-					dst[i] = src[i], dst[i + 1] = src[i + 1], dst[i + 2] = src[i + 2], dst[i + 3] = src[i + 3];
-				}
+				dst[i] = src[i], dst[i + 1] = src[i + 1], dst[i + 2] = src[i + 2], dst[i + 3] = src[i + 3];
+				if(s < 0 || s >= mask.length || mask[s] == false) {
+					/*dst[i] = dst[i + 1] = dst[i + 2] = 0; */dst[i + 3] = 0; }
+//				} else {
+	//				dst[i] = src[i], dst[i + 1] = src[i + 1], dst[i + 2] = src[i + 2], dst[i + 3] = src[i + 3];
+	//			}
 			}})(step, mask));
 		}
 		return imagedata;
 	}
 
+	gc.grayscale = function(src, imagedata, w, nPix) {
+		if(src && imagedata) {
+			mapFlipY(src, imagedata, w, src, (function(n) { var nPix = n; return function(dst, src, i, test, it) {
+				dst[it] = dst[it + 1] = dst[it + 2] = src[i + nPix], dst[it + 3] = 255;
+			}})(nPix));
+		}
+		return imagedata;
+	}
+	
+	gc.makeImageData = function(imagedata) {
+		if(this.source.color) {
+			if(!imagedata || imagedata.width != this.source.color.width || imagedata.height != this.source.color.height) { 
+				if(!this.source.context) return null;
+				imagedata = this.source.context.createImageData(this.source.color);
+			}
+		}
+		return imagedata;
+	}
 	// check if the algorithm is converged
 	gc.done = function() {
 		if((this.iterations % this.checkEvery) == (this.checkEvery - 1) || this.iterations == this.max - 1) {
@@ -603,5 +629,63 @@ var gc = (function(gc){
 		}
 		return false;
 	}
+	
+	gc.pixelsPerState = function() {
+		var hist = [];
+		if(this.states.length && this.pixels) {
+			var label = Math.floor(256 / this.states.length);
+			if(label > 1) --label;
+			hist.length = this.states.length;
+			fillArray(hist, 0);
+			// count the pixels per state
+			for(i = 0; i < this.pixels.length; i += 4)
+				++hist[Math.floor(this.pixels[i] / label)] 
+		}
+		return hist;
+	}
+	
+	gc.populateStencilMask = function (gc, ctrl) {
+		var i = 0, ix = Math.min(gc.states.length, ctrl.options.length);
+		var x;
+//		var hist = this.pixelsPerState.call(gc);
+		for(i = 0; i < gc.states.length; ++i) {
+			if(i < ix) x = ctrl.options[i];
+			else ctrl.options.add(x = document.createElement('OPTION'));
+			if(ix == 0) x.selected = (i > 0); 
+			x.text = gc.states[i].label;
+//			if(hist.length) x.text += ' : ' + hist[i];
+		}
+		// remove any extra
+		while(i < ctrl.options.length)
+			ctrls.options.remove(i);
+	}
+
+	gc.drawPixelsPerState = function(hist) {
+		if(!hist) hist = gc.pixelsPerState.call(this);
+		var g = this.controls.hist;
+		g.save();
+		g.setTransform(1,0,0,1,0,0);
+		g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+		g.textBaseline="middle"; 
+		g.font="12px Arial"
+		if(this.pixels.length > 0) {
+			var dYPixel = hist.length / g.canvas.height;
+			var dXPixel = this.pixels.length / g.canvas.width / 4;
+			g.setTransform(0.95 / dXPixel,0,0, 1 / dYPixel,0,0);
+		//	g.lineWidth = 2 * Math.min(dXPixel, dYPixel);
+			for(var i = 0; i < hist.length; ++i) {
+				g.fillStyle = this.states[i].color;
+				g.fillRect(0.0, i, hist[i],1);
+			}
+			g.setTransform(1,0,0,1,0,0);
+			for(var i = 0; i < hist.length; ++i) {
+				g.fillStyle='#000000';
+				g.fillText(this.states[i].label + ' : ' + hist[i],5,(i+0.5)/dYPixel);
+			}
+		}
+		g.restore();
+		
+	}
+	
 	return gc;
 })(glimp.algorithms.growCut = {});

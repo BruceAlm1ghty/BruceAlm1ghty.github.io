@@ -24,10 +24,11 @@ var glimp = (function(){
 				this.update = function() { 
 					var tStart = Date.now();
 					if(this.algorithm && this.algorithm.update) this.algorithm.update.call(this);
-					else glimp.common.update.call(this);
+					else this.render();
 					this.time = (Date.now() - tStart);
 					if(this.controls.time) this.controls.time.innerHTML = this.time;
 					if(this.controls.iterations) this.controls.iterations.innerHTML = this.iterations;
+					if(this.change) this.change();
 				};
 				
 				this.change = null; // called after update is complete
@@ -252,12 +253,13 @@ var glimp = (function(){
 				},
 				
 				// default function implementations, should be called with call() or apply() with this = algorithm
+				/*
 				update : function() {
 					if(this.render) { 
 						this.render(); 
 						if(this.change) this.change(); 
 					}
-				},
+				},*/
 
 				updateFragment : function() {
 					this.fragment.text = this.fragment.p + this.fragment.vars;
